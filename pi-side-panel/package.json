@@ -1,0 +1,30 @@
+{
+	"name": "pi-side-panel",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"description": "Pi TUI extension: sidebar, footer, and composer frame.",
+	"keywords": ["pi-package"],
+	"pi": {
+		"extensions": ["./extensions/side-panel.ts"]
+	},
+	"scripts": {
+		"setup": "node scripts/link-host.mjs",
+		"sync": "node scripts/sync-slate.mjs",
+		"typecheck": "tsc -p tsconfig.json",
+		"test": "node scripts/test-load.mjs && node scripts/test-dock.mjs && node scripts/test-resources.mjs && node scripts/test-spotlight.mjs",
+		"test:installed": "node scripts/test-installed.mjs",
+		"test:agents": "node scripts/test-agents.mjs"
+	},
+	"dependencies": {
+		"diff": "^9.0.0",
+		"shiki": "^4.5.0"
+	},
+	"peerDependencies": {
+		"@earendil-works/pi-coding-agent": "*",
+		"@earendil-works/pi-tui": "*"
+	},
+	"devDependencies": {
+		"typescript": "^5.0.0"
+	}
+}

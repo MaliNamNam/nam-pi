@@ -1,0 +1,30 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+debug.log
+npm-debug.log*
+
+# Env / secrets (safety net — should never be committed)
+.env
+.env.*
+*.pem
+*.key
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+
+# Test / run artifacts (contain local paths, timestamps)
+agents/test/results/
+
+# OS junk
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor
+.vscode/
+.idea/
