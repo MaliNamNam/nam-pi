@@ -50,6 +50,31 @@ function snapshot(name, component) {
 	writeFileSync(path.join(process.env.MAC_FRAME_SNAPSHOT_DIR, `${name}.json`), JSON.stringify(component.render(64)));
 }
 
+/** Read actual ANSI cell backgrounds, not just the unstyled border text. */
+function backgroundCells(line) {
+	let bg = null;
+	const cells = [];
+	for (const match of line.matchAll(/\x1b\[([0-9;]*)m|([^\x1b]+)/g)) {
+		if (match[1] === undefined) {
+			for (const char of match[2]) {
+				for (let col = 0; col < visibleWidth(char); col++) cells.push({ char, bg });
+			}
+			continue;
+		}
+		const codes = match[1] === "" ? [0] : match[1].split(";").map(Number);
+		for (let i = 0; i < codes.length; i++) {
+			const code = codes[i];
+			if (code === 0 || code === 49) bg = null;
+			else if (code === 38 || code === 48) {
+				const length = codes[i + 1] === 2 ? 4 : 2;
+				if (code === 48) bg = codes.slice(i + 1, i + length + 1).join(";");
+				i += length;
+			} else if ((code >= 40 && code <= 47) || (code >= 100 && code <= 107)) bg = String(code);
+		}
+	}
+	return cells;
+}
+
 test("an extension tool without renderers receives a frame and keeps its registration intact", (t) => {
 	harness(t);
 	const execute = async () => ({ content: [], details: undefined });
@@ -206,9 +231,34 @@ test("built-ins and tracked shell frames are not framed twice or activated diffe
 	for (const [name, definition] of [...tools, ["bash", shellFrameRenderers("bash")], ["powershell", shellFrameRenderers("powershell")]]) {
 		const component = tool(name, definition, { path: "fixture.ts", command: "echo test" });
 		finish(component);
+		if (name === "bash") snapshot("bash", component);
 		const text = output(component);
 		assert.equal((text.match(/╭/g) ?? []).length, 1, name);
 		assert.equal((text.match(/╰/g) ?? []).length, 1, name);
+	}
+});
+
+test("frame backgrounds fill only interior cells, leaving rounded borders and corners unpainted", (t) => {
+	const { tools } = harness(t);
+	const definitions = [...tools, ["bash", shellFrameRenderers("bash")], ["powershell", shellFrameRenderers("powershell")],
+		["extension_tool", { renderResult: () => new Text("colored \x1b[31mred\x1b[0m reset \x1b[49mend", 0, 0) }]];
+	for (const [name, definition] of definitions) {
+		const component = tool(name, definition, { path: "fixture.ts", command: "echo test" });
+		for (const isPartial of [true, false]) {
+			finish(component, "plain \x1b[31mred\x1b[0m reset \x1b[49mend", false, isPartial);
+			for (const width of [12, 40, 64, 120]) {
+				for (const line of component.render(width).filter(Boolean)) {
+					const cells = backgroundCells(line);
+					assert.equal(cells.length, width, `${name}: row width`);
+					assert.equal(cells[0].bg, null, `${name}: left border background`);
+					assert.equal(cells.at(-1).bg, null, `${name}: right border background`);
+					if (cells[0].char === "│") {
+						assert.notEqual(cells[1].bg, null, `${name}: interior must stay filled`);
+						assert.ok(cells.slice(1, -1).every((cell) => cell.bg === cells[1].bg), `${name}: resets must not punch gaps in the fill`);
+					} else assert.ok(cells.every((cell) => cell.bg === null), `${name}: horizontal borders must not have rectangular fill`);
+				}
+			}
+		}
 	}
 });
 

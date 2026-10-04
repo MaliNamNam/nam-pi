@@ -131,9 +131,9 @@ interface Seg {
 
 const seg = (t: string, o: Omit<Seg, "t"> = {}): Seg => ({ t, ...o });
 
-/** Render one full-width row: a background plus per-segment foregrounds. */
-function renderRow(width: number, segs: Seg[], bg: Color, mode: TerminalColorMode): string {
-	const bgAnsi = backgroundAnsi(bg, mode);
+/** Render one row, using the terminal background when no fill is supplied. */
+function renderRow(width: number, segs: Seg[], bg: Color | undefined, mode: TerminalColorMode): string {
+	const bgAnsi = bg ? backgroundAnsi(bg, mode) : "\x1b[49m";
 	let used = 0;
 	let out = bgAnsi;
 	for (const s of segs) {
@@ -171,7 +171,14 @@ function fit(segs: Seg[], width: number): Seg[] {
 
 function borderRow(width: number, left: string, right: string, mode: TerminalColorMode): string {
 	const fill = Math.max(0, width - 2);
-	return renderRow(width, [seg(left + "─".repeat(fill) + right, { fg: BORDER })], BODY_BG, mode);
+	return renderRow(width, [seg(left + "─".repeat(fill) + right, { fg: BORDER })], undefined, mode);
+}
+
+/** Backgrounds fill whole cells, so keep the border cells outside the fill. */
+function framedRow(width: number, inner: Seg[], bg: Color, mode: TerminalColorMode): string {
+	return renderRow(1, [seg("│", { fg: BORDER })], undefined, mode) +
+		renderRow(width - 2, [seg(" "), ...fit(inner, width - 4), seg(" ")], bg, mode) +
+		renderRow(1, [seg("│", { fg: BORDER })], undefined, mode);
 }
 
 /**
@@ -180,7 +187,6 @@ function borderRow(width: number, left: string, right: string, mode: TerminalCol
  * repeated here.
  */
 function titleRow(width: number, name: string, mode: TerminalColorMode): string {
-	const innerWidth = Math.max(0, width - 4);
 	const inner: Seg[] = [
 		seg("●", { fg: RED }),
 		seg(" "),
@@ -190,17 +196,11 @@ function titleRow(width: number, name: string, mode: TerminalColorMode): string 
 		seg("  "),
 		seg(name, { fg: TEXT, bold: true }),
 	];
-	return renderRow(width, [seg("│ ", { fg: BORDER }), ...fit(inner, innerWidth), seg(" │", { fg: BORDER })], BAR_BG, mode);
+	return framedRow(width, inner, BAR_BG, mode);
 }
 
 function contentRow(width: number, inner: Seg[], mode: TerminalColorMode): string {
-	const innerWidth = Math.max(0, width - 4);
-	return renderRow(
-		width,
-		[seg("│ ", { fg: BORDER }), ...fit(inner, innerWidth), seg(" │", { fg: BORDER })],
-		BODY_BG,
-		mode,
-	);
+	return framedRow(width, inner, BODY_BG, mode);
 }
 
 /** Wrap a pre-styled line in the frame, preserving its ANSI and background. */
@@ -209,7 +209,7 @@ function styledContentRow(width: number, ansiText: string, mode: TerminalColorMo
 	const clipped = truncateToWidth(ansiText, innerWidth, "…", false);
 	const clippedWidth = visibleWidth(clipped);
 	const body = clipped + " ".repeat(Math.max(0, innerWidth - clippedWidth));
-	return renderRow(width, [seg("│ ", { fg: BORDER }), seg(body), seg(" │", { fg: BORDER })], BODY_BG, mode);
+	return framedRow(width, [seg(body)], BODY_BG, mode);
 }
 
 // ---------------------------------------------------------------------------
