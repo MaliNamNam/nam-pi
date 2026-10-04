@@ -202,8 +202,8 @@ Agents come from JSON or Markdown, using OpenCode's field names.
 ### JSON
 
 ```jsonc
-// <agent-dir>/safeguards.json, <agent-dir>/pi.jsonc, <agent-dir>/settings.json
-// or the project's .pi/ equivalents
+// <agent-dir>/pi.json or pi.jsonc (shared with model/provider extensions)
+// also settings.json, safeguards.json, or the project's .pi/ equivalents
 {
   "agent": {
     "code-reviewer": {
@@ -247,13 +247,12 @@ Locations, lowest precedence first:
 
 | Path | Scope |
 |---|---|
-| `~/.config/opencode/opencode.jsonc` (or `opencode.json`) | migration fallback, user |
-| `<agent-dir>/settings.json`, `safeguards.json`, `pi.jsonc` | user; `pi.jsonc` wins among JSON files |
+| `<agent-dir>/settings.json`, `safeguards.json`, `pi.json`, `pi.jsonc` | user; `pi.jsonc` wins among JSON files |
 | `<agent-dir>/agents/*.md` | user Markdown |
-| `<cwd>/.pi/settings.json`, `safeguards.json`, `pi.jsonc` | project (opt in) |
+| `<cwd>/.pi/settings.json`, `safeguards.json`, `pi.json`, `pi.jsonc` | project (opt in) |
 | `<cwd>/.pi/agents/*.md` | project Markdown (opt in) |
 
-Every existing file is read. OpenCode's legacy config is a migration fallback; Pi's user `pi.jsonc` overlays it, and opted-in project config overlays user config. User Markdown can override user JSON; project JSON overrides user Markdown. Partial entries merge for custom agents as well as built-ins: omitted fields preserve earlier values, explicit false/empty text wins, and permission rules append in order. `disable: true` or `disabled: true` removes an earlier definition, including a built-in. Description-less agents remain available with fallback listing text. Native v2 structured config is still a compatibility subset; see the audit.
+Every existing Pi config file is read; `pi.jsonc` overlays `pi.json` within each scope, and opted-in project config overlays user config. Only the `agent` section is used, regardless of which extension manages other sections in the same file. OpenCode configuration is not read. User Markdown can override user JSON; project JSON overrides user Markdown. Partial entries merge for custom agents as well as built-ins: omitted fields preserve earlier values, explicit false/empty text wins, and permission rules append in order. `disable: true` or `disabled: true` removes an earlier definition, including a built-in. Description-less agents remain available with fallback listing text. Native v2 structured config is still a compatibility subset; see the audit.
 
 Project-local agents are **not** loaded by default, since they are repository-controlled prompts.
 

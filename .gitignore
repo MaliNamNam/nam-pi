@@ -11,6 +11,9 @@ npm-debug.log*
 .env.*
 *.pem
 *.key
+pi.json
+pi.jsonc
+auth.json
 
 # Build output
 dist/

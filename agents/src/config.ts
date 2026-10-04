@@ -9,8 +9,9 @@
  *      (`packages/core/src/config/plugin/agent.ts` `decode`, `~/.config/opencode/agents/`)
  *
  * Pi locations, chosen to match Pi conventions while keeping OpenCode's shape:
- *   <agent-dir>/safeguards.json        `agent` map (same file the safeguards extension reads)
- *   <cwd>/.pi/safeguards.json          `agent` map, project scope
+ *   <agent-dir>/pi.json, pi.jsonc      `agent` map (shared with other Pi extensions)
+ *   <cwd>/.pi/pi.json, pi.jsonc        `agent` map, project scope
+ *   settings.json, safeguards.json    additional Pi config sources in either scope
  *   <agent-dir>/agents/*.md            user markdown agents
  *   <cwd>/.pi/agents/*.md              project markdown agents
  *
@@ -20,7 +21,6 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { BUILTIN_AGENTS, PLAN_LEAVE_REMINDER, PLAN_REMINDER } from "./builtin.ts";
@@ -29,19 +29,8 @@ import type { AgentDefinition, AgentMode, AgentSource, DiscoveryOptions, Permiss
 
 export { PLAN_LEAVE_REMINDER, PLAN_REMINDER };
 
-// Pi's pi.jsonc is the authoritative user/project agent map.
-const CONFIG_FILES = ["settings.json", "safeguards.json", "pi.jsonc"];
-
-/**
- * OpenCode's own config locations.
- *
- * A machine migrated from OpenCode keeps its `agent` map here. It is a
- * fallback: Pi's local pi.jsonc wins when both configure the same agent.
- */
-function opencodeConfigFiles(): string[] {
-	const xdg = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config");
-	return [path.join(xdg, "opencode", "opencode.jsonc"), path.join(xdg, "opencode", "opencode.json")];
-}
+// Pi's shared config is authoritative; pi.jsonc overlays pi.json in each scope.
+const CONFIG_FILES = ["settings.json", "safeguards.json", "pi.json", "pi.jsonc"];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -358,12 +347,9 @@ export function discoverAgents(options: DiscoveryOptions): DiscoveryResult {
 	// 1. Built-ins (OpenCode parity). Experimental agents are opt-in.
 	add(BUILTIN_AGENTS.filter((agent) => !agent.experimental || options.experimental));
 
-	// User OpenCode config is a migration fallback; Pi's own files take priority.
+	// Read the agent section of Pi config, independent of other extensions.
 	if (includeUser) {
-		for (const file of existing([
-			...opencodeConfigFiles(),
-			...CONFIG_FILES.map((name) => path.join(agentDir, name)),
-		])) {
+		for (const file of existing(CONFIG_FILES.map((name) => path.join(agentDir, name)))) {
 			scanned.push(file);
 			add(loadJsonAgents(file, "user"));
 		}

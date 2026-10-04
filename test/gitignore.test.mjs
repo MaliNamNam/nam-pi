@@ -40,3 +40,13 @@ test("generated worktrees, child sessions and permission transport state are ign
 test("worktree implementation, documentation and regression tests remain commit-eligible", () => {
 	assert.deepEqual(ignored(sources), []);
 });
+
+test("private Pi configuration and credentials are ignored without hiding examples or source", () => {
+	const privateFiles = [
+		"pi.json", "pi.jsonc", "auth.json",
+		".pi/pi.json", ".pi/pi.jsonc", ".pi/auth.json",
+		"nested/project/.pi/pi.json", "nested/project/.pi/pi.jsonc", "nested/project/.pi/auth.json",
+	];
+	assert.deepEqual(ignored(privateFiles), privateFiles);
+	assert.deepEqual(ignored(["pi.example.json", ".pi/pi.example.jsonc", "agents/test/config.test.ts"]), []);
+});
