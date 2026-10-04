@@ -50,6 +50,7 @@ export interface ChildDecoration {
   sessionID: string;
   childID: string;
   cwd: string;
+  branch?: string;
   tui: TUI;
   theme: Theme;
   page: AgentPage;
@@ -180,7 +181,7 @@ export class ChildWorkspacePage implements Component {
   private composerSource(): ComposerSource {
     const facts = this.currentFacts();
     return {
-      project: basename(this.request.cwd), branch: this.source.branch(),
+      project: basename(this.request.cwd), branch: this.request.branch ?? this.source.branch(),
       model: facts.model, thinking: facts.thinking, version: `pi-${VERSION}`,
       footer: "standard", theme: this.ctx.ui.theme,
     };

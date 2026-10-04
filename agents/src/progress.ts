@@ -1,6 +1,7 @@
 import { stripTerminalSequences } from "@earendil-works/pi-tui";
 import type { PiEvent, Usage } from "./runner.ts";
 import type { OutputRange } from "./subagent-result.ts";
+import type { WorktreeWorkspace } from "./worktrees.ts";
 
 const MAX_ITEMS = 40;
 
@@ -90,4 +91,5 @@ export interface SubagentToolDetails {
 	usage?: Usage;
 	model?: string;
 	background?: boolean;
+	workspace?: WorktreeWorkspace;
 }

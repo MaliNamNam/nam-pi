@@ -10,7 +10,7 @@ import type { DetachedRun, RunHandle, RunOptions } from "./runner.ts";
 
 /** Conservative first-stage support: a last catch-all must deny all delegation. */
 export function sdkEligible(options: RunOptions): boolean {
-	if (process.env.PI_AGENT_SDK_WORKER === "1" || process.versions.bun || !options.sessionDir || path.resolve(options.cwd) !== path.resolve(process.cwd())) return false;
+	if (options.workspace || process.env.PI_AGENT_CONFIG_CWD || process.env.PI_AGENT_SDK_WORKER === "1" || process.versions.bun || !options.sessionDir || path.resolve(options.cwd) !== path.resolve(process.cwd())) return false;
 	if (!leafPolicy(options.agent.permissions)) return false;
 	const supported = new Set(["PI_AGENT_ID", "PI_AGENT_DEPTH", "PI_AGENT_DEPTH_LIMIT", "PI_AGENT_FORMS", "PI_AGENT_SCOPE", "PI_AGENT_STRICT_SHELL"]);
 	return Object.keys(options.env ?? {}).every((key) => supported.has(key));

@@ -364,10 +364,13 @@ async function addDenyRule(ctx: ExtensionCommandContext, action: string, resourc
 /* ------------------------------------------------------------------ */
 
 function createEngine(cwd = process.cwd(), pi?: ExtensionAPI): SafeguardEngine {
+	const inherited = process.env.PI_AGENT_ID && process.env.PI_AGENT_CONFIG_CWD;
+	const configCwd = inherited && path.isAbsolute(inherited) ? inherited : cwd;
 	const instance = new SafeguardEngine({
 		cwd,
+		configCwd,
 		agentDir: getAgentDir(),
-		projectId: projectId(cwd),
+		projectId: projectId(configCwd),
 	});
 	if (pi?.getFlag("safeguards-auto") === true) instance.auto = true;
 	return instance;

@@ -1,10 +1,14 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { childDiscovery, childSessionDir, listOwnedChildren, type OwnerContext } from "./ownership.ts";
+import type { WorktreeWorkspace } from "./worktrees.ts";
 
 export interface FamilyChild {
 	id: string;
 	agent: string;
+	cwd: string;
+	workspace?: WorktreeWorkspace;
+	branch?: string;
 	description?: string;
 	status?: "running" | "completed" | "error" | "cancelled";
 	file?: string;
@@ -18,7 +22,7 @@ export async function listSessionFamily(owner: OwnerContext, legacyDir: string):
 	const seen = new Set([owner.parentID]);
 	const family: FamilyChild[] = [];
 	const discovery = childDiscovery();
-	async function walk(current: OwnerContext, legacySessionDir: string, ancestors: boolean[]): Promise<void> {
+	async function walk(current: OwnerContext, legacySessionDir: string, ancestors: boolean[], inheritedBranch?: string): Promise<void> {
 		const legacy = { ...current, sessionDir: legacySessionDir };
 		const [modern, older] = await Promise.all([listOwnedChildren(current, discovery), listOwnedChildren(legacy, discovery)]);
 		const discovered = [
@@ -35,9 +39,10 @@ export async function listSessionFamily(owner: OwnerContext, legacyDir: string):
 			seen.add(child.id);
 			const last = index === children.length - 1;
 			const prefix = ancestors.length === 0 ? "" : ancestors.slice(1).map((ancestor) => ancestor ? "   " : "│  ").join("") + (last ? "└─ " : "├─ ");
-			family.push({ ...child, depth: ancestors.length + 1, prefix });
-			await walk({ cwd: current.cwd, parentID: child.id, parentFile: child.file,
-				sessionDir: childSessionDir(child.owner.sessionDir, child.id) }, child.owner.sessionDir, [...ancestors, last]);
+			const branch = child.workspace?.branch ?? inheritedBranch;
+			family.push({ ...child, depth: ancestors.length + 1, prefix, ...(branch ? { branch } : {}) });
+			await walk({ cwd: child.cwd, parentID: child.id, parentFile: child.file,
+				sessionDir: childSessionDir(child.owner.sessionDir, child.id) }, child.owner.sessionDir, [...ancestors, last], branch);
 		}
 	}
 	await walk(owner, legacyDir, []);

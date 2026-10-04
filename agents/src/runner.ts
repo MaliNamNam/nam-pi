@@ -34,6 +34,7 @@ import { stopSDKWorker, trySDKRun } from "./sdk-client.ts";
 import { bootstrapToolAllowlist } from "./permissions.ts";
 import { encodeProviderOptions, providerOptions } from "./provider-options.ts";
 import type { AgentDefinition } from "./types.ts";
+import { worktreeReport, type WorktreeWorkspace } from "./worktrees.ts";
 
 /** OpenCode's `SubagentCompletion.NO_TEXT`. */
 export const NO_TEXT = "Subagent completed without a text response.";
@@ -67,6 +68,9 @@ export interface RunOptions {
 	/** The task text. For a continuation this is the follow-up message. */
 	task: string;
 	cwd: string;
+	/** Keep observers/jobs in the owning workspace even when child files are isolated. */
+	jobCwd?: string;
+	workspace?: WorktreeWorkspace;
 	/** Model to use. Falls back to the dispatching session's model. */
 	model?: string;
 	/** Remove shell tools from a child when the parent requires strict isolation. */
@@ -259,6 +263,7 @@ export function buildArgs(options: RunOptions, promptFile: string | undefined): 
 	// (`agent.system ? agent.system : default`), so use --system-prompt, not
 	// --append-system-prompt. Tools still reach the model through --tools.
 	if (promptFile) args.push("--system-prompt", promptFile);
+	if (options.workspace) args.push("--agent-worktree", Buffer.from(JSON.stringify(options.workspace)).toString("base64"));
 
 	args.push(options.task);
 	return args;
@@ -276,10 +281,11 @@ export function buildArgs(options: RunOptions, promptFile: string | undefined): 
  * instruction block; an A/B run showed identical path accuracy with and without
  * it, so it was removed rather than left in as unverified prompt weight.
  */
-export function childSystemPrompt(agent: AgentDefinition, cwd: string): string {
+export function childSystemPrompt(agent: AgentDefinition, cwd: string, workspace?: WorktreeWorkspace): string {
 	const parts: string[] = [];
 	if (agent.systemPrompt.trim()) parts.push(agent.systemPrompt.trim());
 	parts.push(`<cwd>\n${cwd.replaceAll("\\", "/")}\n</cwd>`);
+	if (workspace) parts.push(worktreeReport(workspace), "Work only in this checkout. Do not merge into the parent, change other agents' branches, or delete worktrees. Report edits and tests; commit only when requested.");
 	return parts.join("\n\n");
 }
 
@@ -320,7 +326,7 @@ export async function runAgent(options: RunOptions): Promise<RunResult> {
 	// Always write a prompt file: even an agent without its own prompt needs the
 	// cwd restored, because --system-prompt replaces Pi's default prompt.
 	{
-		const written = await writePromptFile(agent.id, childSystemPrompt(agent, options.cwd));
+		const written = await writePromptFile(agent.id, childSystemPrompt(agent, options.cwd, options.workspace));
 		promptDir = written.dir;
 		promptFile = written.filePath;
 	}
@@ -495,8 +501,8 @@ export async function runAgentDetached(options: RunOptions): Promise<DetachedRun
 			? options.task
 			: [options.firstMessagePrefix, options.task].join("\n");
 
-	const promptFile = await writePromptFile(agent.id, childSystemPrompt(agent, options.cwd));
-	const outputDir = path.join(options.cwd, ".pi", "agents", "jobs");
+	const promptFile = await writePromptFile(agent.id, childSystemPrompt(agent, options.cwd, options.workspace));
+	const outputDir = path.join(options.jobCwd ?? options.cwd, ".pi", "agents", "jobs");
 	await fs.mkdir(outputDir, { recursive: true });
 	const outputPath = path.join(outputDir, `${sessionID}.jsonl`);
 	// RPC keeps the original child available for live steering. Only that

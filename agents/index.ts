@@ -18,8 +18,8 @@
  *   /agent explore              switch the primary agent
  *   /agents running             list running background subagents
  *
- * The `subagent` tool mirrors OpenCode's parameter for parameter:
- *   agent, description, prompt, model, sessionID, background
+ * The `subagent` tool uses OpenCode's parameters plus opt-in workspace isolation:
+ *   agent, description, prompt, model, sessionID, background, isolation
  */
 
 import path from "node:path";
@@ -70,6 +70,7 @@ import { awaitForeground } from "./src/foreground.ts";
 import type { AgentDefinition } from "./src/types.ts";
 import { captureChildPresentation } from "./src/presentation.ts";
 import { decodeLiveInput, leafPolicy, LiveInputs, LIVE_PREPARE, LIVE_CANCEL, LIVE_APPLIED, LIVE_PREPARED, LIVE_FAILED, type LiveInputUpdate } from "./src/live-input.ts";
+import { prepareWorktree, createWorktree, verifyWorktree, validWorktree, withWorktreeReport, type WorktreeWorkspace } from "./src/worktrees.ts";
 
 /** OpenCode's default when `experimental.subagent_depth` is unset. */
 const DEFAULT_SUBAGENT_DEPTH = 1;
@@ -373,7 +374,7 @@ export default function agents(pi: ExtensionAPI): void {
 							content: subagentEnvelope({
 								sessionID: record.id,
 								state: outcome.status,
-								output: outcome.status === "completed" ? outcome.output : (outcome.error ?? "Subagent failed"),
+								output: withWorktreeReport(outcome.status === "completed" ? outcome.output : (outcome.error ?? "Subagent failed"), record.workspace),
 								description: record.description,
 							}),
 							display: true,
@@ -385,6 +386,7 @@ export default function agents(pi: ExtensionAPI): void {
 								description: record.description,
 								usage: outcome.usage,
 					model: outcome.model,
+								...(record.workspace ? { workspace: record.workspace } : {}),
 							},
 						},
 						{ triggerTurn: true, deliverAs },
@@ -420,7 +422,7 @@ export default function agents(pi: ExtensionAPI): void {
 		const dispatched = pi.getFlag("agent") || process.env.PI_AGENT_ID;
 		const scope = dispatched ? (process.env.PI_AGENT_SCOPE ?? pi.getFlag("agent-scope")) : pi.getFlag("agent-scope");
 		const result = discoverAgents({
-			cwd: context.cwd,
+			cwd: dispatched && process.env.PI_AGENT_CONFIG_CWD || context.cwd,
 			agentScope: (scope === "project" || scope === "both" ? scope : "user") as "user" | "project" | "both",
 			experimental: experimentalEnabled(pi),
 		});
@@ -519,6 +521,7 @@ export default function agents(pi: ExtensionAPI): void {
 		type: "string",
 	});
 
+	pi.registerFlag("agent-worktree", { description: "Internal isolated workspace metadata", type: "string" });
 	pi.registerFlag("agent-live-backend", { description: "Internal live child transport", type: "string" });
 	if (process.env.PI_AGENT_ID || process.env.PI_AGENT_SDK_WORKER === "1") {
 		pi.registerCommand(LIVE_PREPARE, {
@@ -804,7 +807,10 @@ export default function agents(pi: ExtensionAPI): void {
 	// live switch, while retaining every tool declaration transition verbatim.
 	pi.on("context_with_system", (event) => {
 		if (!runningAsSubagent || !liveAgent) return undefined;
-		const prompt = childSystemPrompt(liveAgent, cwd);
+		const encoded = pi.getFlag("agent-worktree");
+		const workspace: unknown = typeof encoded === "string" ? JSON.parse(Buffer.from(encoded, "base64").toString("utf8")) : undefined;
+		if (workspace !== undefined && (!validWorktree(workspace) || workspace.cwd !== path.resolve(cwd))) throw new Error("Invalid child worktree context");
+		const prompt = childSystemPrompt(liveAgent, cwd, workspace as WorktreeWorkspace | undefined);
 		let first = true;
 		return { messages: event.messages.map((message) => {
 			if (message.role !== "system") return message;
@@ -971,20 +977,21 @@ export default function agents(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"Delegate a task to a child session with fresh context; include relevant context and instructions.",
-			"Foreground (default) waits for the final response; use it when your next step depends on the findings.",
-			"background=true returns immediately and notifies on completion; use only alongside independent work.",
-			"The returned sessionID continues that child conversation.",
+			"Delegate a task with fresh context; include necessary instructions.",
+			"Foreground (default) waits for the answer; use when your next step depends on it.",
+			"background=true returns immediately and notifies on completion; use alongside independent work.",
+			"sessionID continues the child conversation.",
 		].join("\n"),
 		promptSnippet: "Delegate a task to a specialized subagent",
 		promptGuidelines: [
 			"Use foreground when your next step depends on delegated findings; use background only for specific non-overlapping work.",
 			"Do not repeat delegated exploration; use its result, then read only what implementation or verification requires.",
 			"Do not poll or sleep while a background subagent runs; you are notified when it finishes.",
+			"Use isolation=worktree for independent writing tasks that do not need uncommitted parent edits. Review results; never merge or delete a worktree without explicit user approval.",
 		],
 		parameters: Type.Object({
 			agent: Type.String({
-				description: "Agent type from Available subagents. If a requested name is not listed, treat it as a model: choose a suitable agent and use model.",
+				description: "Agent from Available subagents. If not listed, treat the name as a model: choose a suitable agent and use model.",
 			}),
 			description: Type.String({ description: "3-5 word task label shown to the user" }),
 			prompt: Type.String({ description: "Child task and necessary context/instructions" }),
@@ -995,7 +1002,7 @@ export default function agents(pi: ExtensionAPI): void {
 			),
 			sessionID: Type.Optional(
 				Type.String({
-					description: "Continue this child session; omit to start a new conversation.",
+					description: "Continue this child; omit for a new conversation.",
 				}),
 			),
 			background: Type.Optional(
@@ -1003,6 +1010,9 @@ export default function agents(pi: ExtensionAPI): void {
 					description: "Default false (foreground). true returns immediately; completion is announced. Do not sleep, poll, or proactively check progress.",
 				}),
 			),
+			isolation: Type.Optional(Type.Union([Type.Literal("shared"), Type.Literal("worktree")], {
+				description: "Default shared; worktree uses committed HEAD. Continuations keep their workspace.",
+			})),
 		}),
 
 		async execute(toolCallId, params, signal, onUpdate, ctx) {
@@ -1012,6 +1022,7 @@ export default function agents(pi: ExtensionAPI): void {
 			const input = normalizeInput(params);
 			if (!input.agent) return failure("Missing required parameter: agent");
 			if (!input.prompt) return failure("Missing required parameter: prompt");
+			if (input.isolation !== undefined && !["shared", "worktree"].includes(input.isolation)) return failure("Invalid isolation: use shared or worktree");
 
 			if (agents.length === 0) reloadAgents(ctx);
 			if (missingDispatchedAgent) return failure(`Dispatched agent ${runningAsSubagent} is not available in this child`);
@@ -1059,6 +1070,11 @@ export default function agents(pi: ExtensionAPI): void {
 			if (continuation && !owned) {
 				return failure(`Subagent session ${sessionID} not found or not a child of the current session`);
 			}
+			let workspace = owned?.workspace;
+			let childCwd = owned?.cwd ?? ctx.cwd;
+			if (continuation && input.isolation !== undefined && input.isolation !== (workspace ? "worktree" : "shared")) {
+				return failure("Cannot change isolation on an existing child; start a new session instead");
+			}
 			// Validate explicit selections before either live or settled admission.
 			let explicitModel: string | undefined;
 			let explicitThinking: string | undefined;
@@ -1071,6 +1087,10 @@ export default function agents(pi: ExtensionAPI): void {
 				const translated = toPiModelArgument(ref);
 				explicitModel = translated.model; explicitThinking = translated.thinkingLevel;
 			}
+			if (workspace) {
+				try { await verifyWorktree(workspace, signal); }
+				catch (error) { return failure(withWorktreeReport(`Cannot continue isolated child: ${error instanceof Error ? error.message : String(error)}`, workspace)); }
+			}
 			if (continuation && (foregroundRuns.has(sessionID) || registry.getLive(sessionID))) {
 			if (!runtimeActive || generation !== sessionGeneration || signal?.aborted) return failure("Session changed or child input cancelled");
 			const foreground = foregroundRuns.get(sessionID), child = foreground?.run.child ?? registry.getLive(sessionID)!;
@@ -1079,7 +1099,7 @@ export default function agents(pi: ExtensionAPI): void {
 			observeLiveAgent(child, childOwner, sessionID);
 			const description = input.description ?? `${agent.id} task`;
 			callChildIDs.set(toolCallId, sessionID);
-			const details: SubagentToolDetails = { sessionID, status: "running", agent: agent.id, description };
+			const details: SubagentToolDetails = { sessionID, status: "running", agent: agent.id, description, ...(workspace ? { workspace } : {}) };
 			onUpdate?.({ content: [{ type: "text", text: `(${agent.id} accepting input...)` }], details });
 			let joined: DetachedRun | undefined;
 			let joinAborter: AbortController | undefined, joinBackgrounder: AbortController | undefined;
@@ -1091,7 +1111,7 @@ export default function agents(pi: ExtensionAPI): void {
 				if (input.background === true) {
 					foregroundBackgrounders.get(sessionID)?.abort(); // release an existing foreground wait, not the child
 					callBackgroundIDs.add(toolCallId);
-					return { content: [{ type: "text", text: backgroundNotice(sessionID) }], details: { ...details, background: true, inputDisposition: disposition } };
+					return { content: [{ type: "text", text: withWorktreeReport(backgroundNotice(sessionID), workspace) }], details: { ...details, background: true, inputDisposition: disposition } };
 				}
 				let result: RunResult;
 				if (foreground) {
@@ -1101,21 +1121,21 @@ export default function agents(pi: ExtensionAPI): void {
 				} else {
 					joinAborter = new AbortController(); joinBackgrounder = new AbortController();
 					foregroundAborters.set(sessionID, joinAborter); foregroundBackgrounders.set(sessionID, joinBackgrounder);
-					result = await awaitForeground(joined!, { agent, task: input.prompt, cwd: ctx.cwd, sessionID,
+					result = await awaitForeground(joined!, { agent, task: input.prompt, cwd: childCwd, workspace, sessionID,
 						signal: signal ? AbortSignal.any([signal, joinAborter.signal]) : joinAborter.signal, backgroundSignal: joinBackgrounder.signal,
 					}, readDetachedResult);
 					if (result.status !== "running") await registry.release(sessionID);
 				}
 				if (result.status === "running") {
 					callBackgroundIDs.add(toolCallId);
-					return { content: [{ type: "text", text: backgroundNotice(sessionID) }], details: { ...details, background: true, inputDisposition: disposition } };
+					return { content: [{ type: "text", text: withWorktreeReport(backgroundNotice(sessionID), workspace) }], details: { ...details, background: true, inputDisposition: disposition } };
 				}
 				await setChildStatus(childOwner, sessionID, result.status).catch(() => {});
-				if (result.status === "cancelled") return failure(`Subagent cancelled (sessionID: ${sessionID})`);
-				if (result.status === "error") return failure(`Subagent failed (sessionID: ${sessionID}): ${result.error ?? "unknown error"}`);
+				if (result.status === "cancelled") return failure(withWorktreeReport(`Subagent cancelled (sessionID: ${sessionID})`, workspace));
+				if (result.status === "error") return failure(withWorktreeReport(`Subagent failed (sessionID: ${sessionID}): ${result.error ?? "unknown error"}`, workspace));
 				await agentMetadata.get(path.resolve(childOwner.sessionDir, sessionID))?.catch(() => {});
-				return completedSubagentResult(result.output, { ...details, agent: child.agent ?? details.agent, usage: result.usage, model: result.model, inputDisposition: disposition });
-			} catch (error) { return failure(`Cannot admit live child input (sessionID: ${sessionID}): ${error instanceof Error ? error.message : String(error)}`); }
+				return completedSubagentResult(withWorktreeReport(result.output, workspace), { ...details, agent: child.agent ?? details.agent, usage: result.usage, model: result.model, inputDisposition: disposition });
+			} catch (error) { return failure(withWorktreeReport(`Cannot admit live child input (sessionID: ${sessionID}): ${error instanceof Error ? error.message : String(error)}`, workspace)); }
 			finally {
 				signal?.removeEventListener("abort", cancelShared);
 				if (joined) registry.unjoin(sessionID, child);
@@ -1143,10 +1163,19 @@ export default function agents(pi: ExtensionAPI): void {
 			receiptRuns.delete(path.resolve(childOwner.sessionDir, sessionID)); // revoke the previous generation before any new dispatch
 			try {
 				if (!continuation) {
+					if (input.isolation === "worktree") {
+						workspace = await prepareWorktree(owner, sessionID, signal);
+						childCwd = workspace.cwd;
+					}
+					if (!runtimeActive || generation !== sessionGeneration || signal?.aborted) throw new Error("Session changed or dispatch cancelled");
 					try {
-						await claimChild(owner, sessionID, agent.id, description);
+						await claimChild(owner, sessionID, agent.id, description, workspace);
 					} catch (error) {
 						return failure(`Cannot create subagent session: ${error instanceof Error ? error.message : String(error)}`);
+					}
+					if (workspace) {
+						if (workspace.parentDirty && ctx.hasUI) ctx.ui.notify("Isolated child starts from committed HEAD; parent uncommitted changes are not included", "warning");
+						await createWorktree(workspace, signal);
 					}
 				} else await setChildStatus(childOwner, sessionID, "running");
 				const registerInterrupt = () => {
@@ -1163,13 +1192,15 @@ export default function agents(pi: ExtensionAPI): void {
 
 				callChildIDs.set(toolCallId, sessionID);
 				const formRoute = await formsRoute(ctx);
+				if (!runtimeActive || generation !== sessionGeneration || signal?.aborted) throw new Error("Session changed or dispatch cancelled");
 				// Background mode releases the parent turn, not process ownership.
 				if (input.background === true) {
 					const record = await registry.startBackground({
 						sessionID,
 						agent,
 						task: input.prompt,
-						cwd: ctx.cwd,
+						cwd: childCwd,
+						workspace,
 						model,
 						thinkingLevel,
 						sessionDir: childOwner.sessionDir,
@@ -1186,9 +1217,10 @@ export default function agents(pi: ExtensionAPI): void {
 					await registerInterrupt();
 					callBackgroundIDs.add(toolCallId);
 					void refreshComposer(ctx, sessionGeneration);
-					const notice = registry.notice(record.id);
+					const notice = withWorktreeReport(registry.notice(record.id), workspace);
 					const details: SubagentToolDetails = {
 						sessionID: record.id, status: "running", agent: agent.id, description, background: true,
+						...(workspace ? { workspace } : {}),
 					};
 					onUpdate?.({ content: [{ type: "text", text: notice }], details });
 					return { content: [{ type: "text", text: notice }], details };
@@ -1205,17 +1237,19 @@ export default function agents(pi: ExtensionAPI): void {
 				void refreshComposer(ctx, sessionGeneration);
 				const updateProgress = () => onUpdate?.({
 					content: [{ type: "text", text: `(${agent.id} running${progress.items.length ? `: ${progress.items.at(-1)}` : ""}...)` }],
-					details: { sessionID, status: "running", agent: agent.id, description, progress: [...progress.items], model: progress.model } satisfies SubagentToolDetails,
+					details: { sessionID, status: "running", agent: agent.id, description, progress: [...progress.items], model: progress.model, ...(workspace ? { workspace } : {}) } satisfies SubagentToolDetails,
 				});
 				updateProgress();
 
 				const running = runAgent({
-					backend: (pi.getFlag("agent-runner") ?? process.env.PI_AGENT_RUNNER) === "sdk" ? "sdk" : "process",
+					backend: !workspace && (pi.getFlag("agent-runner") ?? process.env.PI_AGENT_RUNNER) === "sdk" ? "sdk" : "process",
 					projectTrusted: typeof ctx.isProjectTrusted === "function" && ctx.isProjectTrusted(),
 					onBackendFallback: (reason) => ctx.ui.notify(`SDK runner unavailable; using subprocess: ${reason}`, "warning"),
 					agent,
 					task: input.prompt,
-					cwd: ctx.cwd,
+					cwd: childCwd,
+					jobCwd: ctx.cwd,
+					workspace,
 					model,
 					thinkingLevel,
 					sessionDir: childOwner.sessionDir,
@@ -1226,7 +1260,8 @@ export default function agents(pi: ExtensionAPI): void {
 					backgroundSignal: backgrounder.signal,
 					onStarted: (run) => { foregroundRuns.set(sessionID, { run, result: running }); observeLiveAgent(run.child, childOwner, sessionID); },
 					onEvent: (event) => { if (progress.add(event)) updateProgress(); },
-					env: { ...subagentEnvironment(agent, depth + 1, agentScope, limit, strictShell), PI_AGENT_FORMS: formRoute ?? "" },
+					env: { ...subagentEnvironment(agent, depth + 1, agentScope, limit, strictShell), PI_AGENT_FORMS: formRoute ?? "",
+						...(workspace ? { PI_AGENT_CONFIG_CWD: process.env.PI_AGENT_CONFIG_CWD || workspace.sourceCwd } : {}) },
 					strictShell,
 					firstMessagePrefix: "You are a subagent spawned by another session.",
 				});
@@ -1236,24 +1271,24 @@ export default function agents(pi: ExtensionAPI): void {
 
 				if (switched) await switchChildAgent(childOwner, sessionID, finalAgent);
 				if (result.status === "running" && result.detached) {
-					await registry.adopt({ run: result.detached, sessionID, agent: result.detached.child.agent ?? agent.id, description, parentSessionID: owner.parentID });
+					await registry.adopt({ run: result.detached, sessionID, agent: result.detached.child.agent ?? agent.id, description, parentSessionID: owner.parentID, workspace });
 					foregroundAborters.delete(sessionID);
 					await registerInterrupt();
 					callBackgroundIDs.add(toolCallId);
-					const notice = registry.notice(sessionID);
+					const notice = withWorktreeReport(registry.notice(sessionID), workspace);
 					return { content: [{ type: "text" as const, text: notice }],
-						details: { sessionID, status: "running" as const, agent: agent.id, description, background: true } };
+						details: { sessionID, status: "running" as const, agent: agent.id, description, background: true, ...(workspace ? { workspace } : {}) } };
 				}
 				await setChildStatus(childOwner, sessionID, result.status).catch(() => {});
 				if (result.status === "cancelled") {
-					return failure(`Subagent cancelled (sessionID: ${sessionID})`);
+					return failure(withWorktreeReport(`Subagent cancelled (sessionID: ${sessionID})`, workspace));
 				}
 				if (result.status === "error") {
 					// Keep the sessionID visible so the model can continue the child.
-					return failure(`Subagent failed (sessionID: ${sessionID}): ${result.error ?? "unknown error"}`);
+					return failure(withWorktreeReport(`Subagent failed (sessionID: ${sessionID}): ${result.error ?? "unknown error"}`, workspace));
 				}
 
-				return completedSubagentResult(result.output, {
+				return completedSubagentResult(withWorktreeReport(result.output, workspace), {
 					sessionID,
 					status: "completed",
 					agent: finalAgent,
@@ -1261,7 +1296,12 @@ export default function agents(pi: ExtensionAPI): void {
 					usage: result.usage,
 					progress: [...progress.items],
 					model: result.model,
+					...(workspace ? { workspace } : {}),
 				});
+			} catch (error) {
+				if (!workspace && input.isolation !== "worktree") throw error;
+				await setChildStatus(childOwner, sessionID, signal?.aborted ? "cancelled" : "error").catch(() => {});
+				return failure(withWorktreeReport(`Subagent dispatch failed (sessionID: ${sessionID}): ${error instanceof Error ? error.message : String(error)}`, workspace));
 			} finally {
 				foregroundRuns.delete(sessionID);
 				foregroundAborters.delete(sessionID);
@@ -1341,9 +1381,14 @@ export default function agents(pi: ExtensionAPI): void {
 
 	async function composerFamily(ctx: ExtensionContext, registry: JobRegistry, currentID?: string): Promise<{ children: FamilyChild[]; entries: ComposerChild[] }> {
 		const children = await ownedFamily(ctx);
-		const records = await registry.list();
-		const recordByID = new Map(records.map((record) => [record.id, record]));
-		const running = new Map((await registry.running(records)).map((job) => [job.id, job]));
+		const stores = [registry, ...[...new Set(children.map((child) => child.owner.cwd))]
+			.filter((directory) => path.resolve(directory) !== path.resolve(ctx.cwd)).map((directory) => new JobRegistry(directory))];
+		const snapshots = await Promise.all(stores.map(async (store) => {
+			const records = await store.list();
+			return { records, running: await store.running(records) };
+		}));
+		const recordByID = new Map(snapshots.flatMap((snapshot) => snapshot.records).map((record) => [record.id, record]));
+		const running = new Map(snapshots.flatMap((snapshot) => snapshot.running).map((job) => [job.id, job]));
 		const active = new Set([ctx.sessionManager.getSessionId()]);
 		const entries: ComposerChild[] = [];
 		for (const child of children) {
@@ -1351,7 +1396,7 @@ export default function agents(pi: ExtensionAPI): void {
 			const record = recordByID.get(child.id);
 			const matchingRecord = record?.parentSessionID === child.owner.parentID ? record : undefined;
 			const nestedForeground = child.depth > 1 && child.status === "running" && active.has(child.owner.parentID) &&
-				(!matchingRecord || matchingRecord.notified) && existsSync(path.join(ctx.cwd, ".pi", "agents", "jobs", `${child.id}.jsonl`));
+				(!matchingRecord || matchingRecord.notified) && existsSync(path.join(child.owner.cwd, ".pi", "agents", "jobs", `${child.id}.jsonl`));
 			const isRunning = activeChildren.has(child.id) || job?.parentSessionID === child.owner.parentID || nestedForeground;
 			if (isRunning) active.add(child.id);
 			entries.push({
@@ -1390,7 +1435,7 @@ export default function agents(pi: ExtensionAPI): void {
 				let page: ChildSessionPage | undefined;
 				let entries: ComposerChild[] = [];
 				let shells: ShellRun[] = [];
-				const shellOwner: OwnerContext = { cwd: ctx.cwd, parentID: child.id, parentFile: child.file,
+				const shellOwner: OwnerContext = { cwd: child.cwd, parentID: child.id, parentFile: child.file,
 					sessionDir: childSessionDir(child.owner.sessionDir, child.id) };
 				const read = ctx.mode === "tui" ? readChildTranscript : readChildTimeline;
 				const load = async (): Promise<string[] | ChildTranscript> => {
@@ -1404,9 +1449,9 @@ export default function agents(pi: ExtensionAPI): void {
 						shellOwner.parentFile = children.find((entry) => entry.id === child.id)?.file;
 						shells = await readShellRuns(shellOwner);
 					}
-					const outputPath = path.join(ctx.cwd, ".pi", "agents", "jobs", `${child.id}.jsonl`);
+					const outputPath = path.join(child.owner.cwd, ".pi", "agents", "jobs", `${child.id}.jsonl`);
 					if (foregroundAborters.has(child.id) || child.depth > 1 && existsSync(outputPath)) return read(outputPath, "events");
-					const record = await registry.get(child.id);
+					const record = await (child.owner.cwd === ctx.cwd ? registry : new JobRegistry(child.owner.cwd)).get(child.id);
 					if (record && !record.notified && record.parentSessionID === child.owner.parentID) return read(record.outputPath, "events");
 					const owned = await findOwnedChild(child.owner, child.id);
 					return owned ? read(owned.file, "session") : ["(Waiting for child output…)"];
@@ -1419,7 +1464,7 @@ export default function agents(pi: ExtensionAPI): void {
 					const finish = (id?: string) => { page?.dispose(); done(id); };
 					closeChildPage = () => finish(); // shutdown closes every overlay, not just one level
 					page = new ChildSessionPage(tui, theme, keys, child.id, lines, () => finish(child.owner.parentID), {
-						cwd: ctx.cwd,
+						cwd: child.cwd,
 						toolDefinitions: childToolDefinitions,
 						presentation: captureChildPresentation(tui, childToolDefinitions, pi.getSettings?.()),
 						title: `${name}: ${child.description ?? child.id}`,
@@ -1439,7 +1484,8 @@ export default function agents(pi: ExtensionAPI): void {
 					});
 					const presentation: ChildPageDecoration = {
 						sessionID: ctx.sessionManager.getSessionId(), childID: child.id,
-						title: `${name}: ${child.description ?? child.id}`, cwd: ctx.cwd,
+						title: `${name}: ${child.description ?? child.id}`, cwd: child.cwd,
+						...(child.branch ? { branch: child.branch } : {}),
 						tui, theme, page, component: page,
 						viewChild: (id) => { if (id !== child.id) finish(id); },
 					};
@@ -1491,7 +1537,7 @@ export default function agents(pi: ExtensionAPI): void {
 				const children = await ownedFamily(ctx);
 				if (subcommand === "sessions") {
 					ctx.ui.notify(children.length
-						? children.map((child) => `${child.prefix}${child.id} - ${child.agent}${child.file ? "" : " (starting)"}${child.owner.sessionDir === ctx.sessionManager.getSessionDir() ? " (legacy)" : ""}`).join("\n")
+						? children.map((child) => `${child.prefix}${child.id} - ${child.agent}${child.file ? "" : " (starting)"}${child.owner.sessionDir === ctx.sessionManager.getSessionDir() ? " (legacy)" : ""}${child.workspace ? `\n  branch: ${child.workspace.branch}\n  worktree: ${child.workspace.path}` : ""}`).join("\n")
 						: "No child sessions belong to this conversation", "info");
 					return;
 				}
@@ -1644,7 +1690,8 @@ function normalizeInput(params: {
 	model?: string;
 	sessionID?: string;
 	background?: boolean;
-}): { agent?: string; description?: string; prompt?: string; model?: string; sessionID?: string; background?: boolean } {
+	isolation?: "shared" | "worktree";
+}): { agent?: string; description?: string; prompt?: string; model?: string; sessionID?: string; background?: boolean; isolation?: "shared" | "worktree" } {
 	// OpenCode's execute.before hook deletes empty model/sessionID strings that
 	// some providers send for omitted optional fields.
 	const input = { ...params };

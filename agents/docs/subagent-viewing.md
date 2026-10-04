@@ -17,7 +17,7 @@ child transcript. Only the running child publishes `subagent-ui-state` entries.
 - Resources shows the child's published active tool count, read-only. Old
   transcripts without this declaration say unknown. Root extension/skill/MCP
   counts and root resource toggles are not presented as child facts.
-- Workspace branch and sidebar width are shared appearance/workspace settings.
+- Shared children keep their owning workspace branch; isolated children show their own worktree branch. Sidebar width remains a shared appearance setting.
   The regular-mode root sidebar overlay is suspended until child disposal, so
   its stats and open resource widget cannot obscure or consume child input.
 

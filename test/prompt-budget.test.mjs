@@ -47,13 +47,17 @@ test("compact guidance preserves dispatch, continuation, and model-selection rul
 	assert.match(background.description, /(?:not|NEVER).*sleep.*poll/i);
 });
 
-test("compaction does not change tool availability or parameter contracts", () => {
+test("existing parameter contracts stay compatible and worktree isolation is optional", () => {
 	assert.deepEqual([...tools.keys()].sort(), ["bash", "powershell", "questionnaire", "subagent"]);
 	assert.deepEqual(tool.parameters.required, ["agent", "description", "prompt"]);
-	assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "description", "prompt", "model", "sessionID", "background"]);
-	for (const [name, parameter] of Object.entries(tool.parameters.properties)) {
-		assert.equal(parameter.type, name === "background" ? "boolean" : "string");
+	assert.deepEqual(Object.keys(tool.parameters.properties), ["agent", "description", "prompt", "model", "sessionID", "background", "isolation"]);
+	for (const name of ["agent", "description", "prompt", "model", "sessionID", "background"]) {
+		assert.equal(tool.parameters.properties[name].type, name === "background" ? "boolean" : "string");
 	}
+	assert.deepEqual(tool.parameters.properties.isolation.anyOf.map((choice) => choice.const), ["shared", "worktree"]);
+	assert.ok(!tool.parameters.required.includes("isolation"));
+	assert.match(tool.parameters.properties.isolation.description, /Default shared/);
+	assert.match(tool.promptGuidelines.join("\n"), /explicit user approval/);
 	assert.equal(tool.exposure, undefined, "tools remain directly available by default");
 	assert.equal(tool.promptSnippet, "Delegate a task to a specialized subagent");
 	assert.equal(tools.get("questionnaire").parameters.properties.questions.minItems, 1);

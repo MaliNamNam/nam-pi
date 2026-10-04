@@ -23,6 +23,7 @@ export interface ChildPageDecoration {
 	childID: string;
 	title: string;
 	cwd: string;
+	branch?: string;
 	tui: TUI;
 	theme: Theme;
 	page: ChildSessionPage;

@@ -55,6 +55,8 @@ export interface SafeguardResult {
 
 export interface EngineOptions {
 	cwd: string;
+	/** Isolated agents inherit policy files without resolving tools against the parent checkout. */
+	configCwd?: string;
 	agentDir?: string;
 	/** Project identifier used to scope saved grants. */
 	projectId: string;
@@ -75,13 +77,15 @@ export class SafeguardEngine {
 	readonly cwd: string;
 
 	private readonly agentDir: string;
+	private readonly configCwd: string;
 	private readonly promptCache = new Map<string, Promise<PermissionReply>>();
 	private readonly history: Array<{ toolName: string; hash: string }> = [];
 
 	constructor(options: EngineOptions) {
 		this.cwd = options.cwd;
 		this.agentDir = options.agentDir ?? "";
-		this.config = loadConfig({ cwd: options.cwd, agentDir: options.agentDir });
+		this.configCwd = options.configCwd ?? options.cwd;
+		this.config = loadConfig({ cwd: this.configCwd, agentDir: options.agentDir });
 		this.saved = new SavedPermissions(options.projectId);
 		this.auto = this.config.auto;
 	}
@@ -116,7 +120,7 @@ export class SafeguardEngine {
 	}
 
 	reload(): void {
-		this.config = loadConfig({ cwd: this.cwd, agentDir: this.agentDir || undefined });
+		this.config = loadConfig({ cwd: this.configCwd, agentDir: this.agentDir || undefined });
 		this.auto = this.config.auto;
 	}
 

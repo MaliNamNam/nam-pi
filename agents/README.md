@@ -46,7 +46,7 @@ OPENCODE_EXPERIMENTAL_SCOUT=1 pi     # or --agent-experimental
 /agents cancel <sessionID>                       # stop a background subagent
 ```
 
-The model dispatches subagents through the `subagent` tool, whose parameters match OpenCode's exactly:
+The model dispatches subagents through the `subagent` tool, with OpenCode's parameters plus optional workspace isolation:
 
 | Parameter | Meaning |
 |---|---|
@@ -56,6 +56,17 @@ The model dispatches subagents through the `subagent` tool, whose parameters mat
 | `model` | `providerID/modelID` or `providerID/modelID#variant` |
 | `sessionID` | Continue a settled child, or admit input to its existing live run |
 | `background` | Run asynchronously and return immediately |
+| `isolation` | `shared` (default) or `worktree`; continuation keeps the original workspace |
+
+### Optional isolated writing tasks
+
+Set `isolation: "worktree"` when delegating independent implementation work. The child gets its own Git worktree and `pi-agent/<sessionID>` branch from the parent's committed `HEAD`; uncommitted changes are not included, and a dirty parent produces a warning. Shared dispatch remains the default and is appropriate when exploration needs your current drafts.
+
+Foreground/background dispatch, root permission dialogs, the existing child viewer and continuation remain available. Results and `/agents sessions` identify the retained branch/worktree. Completion, cancellation and parent shutdown never merge, reset, clean or delete that checkout. Ask the parent to review and test the changes, then explicitly approve any integration or cleanup. This release adds no automatic merge or cleanup commands.
+
+Worktree allocation is serialized across linked checkouts and Pi processes; the children themselves still work concurrently. A crashed allocation owner leaves a lock for explicit inspection/recovery rather than automatic deletion.
+
+Isolated children use the subprocess runner, not the experimental SDK worker. Original project agent definitions and paired safeguards policy remain effective without copying configuration files. Dependencies, ignored build setup and other local resources are not replicated automatically. Git/worktrees are required only for isolated mode; this is file separation, not a security sandbox. See [workspace behavior and review](docs/worktrees.md).
 
 Typing `@` offers an autocomplete menu of available subagents, matching OpenCode.
 
@@ -353,6 +364,8 @@ npm test
 
 `test/completion-delivery.test.ts` covers boundary/idle collection, startup gating, cancellation/error pauses, session-switch and collector races, persisted acknowledgements and delegation guidance. `test/completion-runtime.test.ts` runs a real Pi parent against a local mock endpoint to verify next-request ordering and no extra settlement request; it uses synthetic child output and launches no subagents.
 
+`test/worktrees.test.ts` exercises committed snapshots, dirty-parent warnings, concurrent checkout separation, ownership and retention against disposable Git repositories. `test/worktree-dispatch.test.ts` exercises the real dispatcher with a fake RPC executable (no Pi child/model calls): foreground/background results, continuation, transfer, cancellation, root forms and original project safeguards. Root `test/worktree-ui.test.mjs` checks the paired child viewer's branch label and width bounds; set `WORKTREE_UI_SNAPSHOT_DIR` to save rendered ANSI snapshots.
+
 Unit and behavioral tests cover agent definitions, configuration, permissions, child arguments, background delivery and cancellation, provider options, and switching primary agents. Run `node test/live-rpc.mjs` to verify `/agents` and `/agents running` with empty, unrelated, and stale job records against a live Pi RPC process. Run `node test/live-continuation.mjs` to check Pi's exact-file continuation and project-scope handoff. Run `node test/live-plan-resume.mjs` to verify restored Plan/Build mode across real session switches and process restarts. Run `node test/live-subagent.mjs` for parent→child dispatch, model selection, hidden child storage, live viewing, background delivery, foreground/background interruption, transferring the same foreground child while Pi is open, and stopping owned children on parent exit against an isolated local mock endpoint (no real-provider traffic). Run `node test/live-path-rules.mjs` to exercise real Pi writes against relative, absolute, dot-segment, file-URL, `@` and junction aliases; the protected file must remain unchanged while an allowed public write succeeds. `test/composer*.test.ts` checks the normal OpenCode layout, controls and click entry points. `test/tui-render.test.ts` exercises the composer and full-page child navigation through Pi's regular and fullscreen terminal renderers with a memory terminal. Repeat with `PI_AGENT_STRICT_SHELL=1` to verify the child tool allowlist excludes shell tools. RPC clients must keep stdin open until the command response arrives: closing it early asks Pi to shut down while an asynchronous command may still be running.
 
 `test/config-parity.test.ts` covers source-backed v2 merging/removal, optional descriptions, retained limits/model settings, explicit false/empty values and primary fallback. The live dispatch suite also exercises description-less agents and partial project overrides in both runners.
@@ -400,6 +413,7 @@ src/foreground.ts   file-backed foreground wait and Ctrl+B handoff
 src/jsonl.ts        cooperative incremental JSONL cursors and partial-record handling
 src/jobs.ts         background job records and completion collection
 src/ownership.ts    child-session ownership, nested storage, legacy migration
+src/worktrees.ts    committed-snapshot worktrees, continuation verification, retained results
 src/family.ts       verified descendant discovery and V2 tree prefixes
 src/interrupts.ts   per-run, owner-routed descendant interruption
 src/forms.ts        root-owned request/reply queue and session-local ask grants

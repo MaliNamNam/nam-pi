@@ -33,6 +33,7 @@ import {
 	type Usage,
 } from "./runner.ts";
 import type { AgentDefinition } from "./types.ts";
+import { validWorktree, type WorktreeWorkspace } from "./worktrees.ts";
 
 export interface JobRecord {
 	id: string;
@@ -46,6 +47,7 @@ export interface JobRecord {
 	pid?: number;
 	/** SDK jobs require their live per-session capability, not the root PID. */
 	backend?: "process" | "sdk";
+	workspace?: WorktreeWorkspace;
 	/** Set once the completion has been delivered. */
 	notified?: boolean;
 }
@@ -106,7 +108,8 @@ export class JobRegistry {
 					path.resolve(parsed.outputPath) !== path.resolve(dir, `${parsed.id}.jsonl`) ||
 					(parsed.pid !== undefined && (!Number.isSafeInteger(parsed.pid) || parsed.pid <= 0)) ||
 					(parsed.backend !== undefined && parsed.backend !== "process" && parsed.backend !== "sdk") ||
-					(parsed.parentSessionID !== undefined && typeof parsed.parentSessionID !== "string")
+					(parsed.parentSessionID !== undefined && typeof parsed.parentSessionID !== "string") ||
+					(parsed.workspace !== undefined && !validWorktree(parsed.workspace))
 				) continue;
 				const current = this.live.get(parsed.id)?.agent;
 				records.push({ ...parsed, ...(current ? { agent: current } : {}) } as JobRecord);
@@ -133,11 +136,14 @@ export class JobRegistry {
 		parentSessionID?: string;
 		formRoute?: string;
 		description: string;
+		workspace?: WorktreeWorkspace;
 	}): Promise<JobRecord> {
 		const run = await this.spawnDetached({
 			agent: input.agent,
 			task: input.task,
 			cwd: input.cwd,
+			jobCwd: this.cwd,
+			workspace: input.workspace,
 			model: input.model,
 			thinkingLevel: input.thinkingLevel,
 			strictShell: input.strictShell,
@@ -152,16 +158,17 @@ export class JobRegistry {
 				PI_AGENT_SCOPE: input.agentScope ?? "user",
 				PI_AGENT_STRICT_SHELL: input.strictShell ? "1" : "0",
 				PI_AGENT_DEPTH_LIMIT: String(input.depthLimit ?? 1),
+				PI_AGENT_CONFIG_CWD: input.workspace ? process.env.PI_AGENT_CONFIG_CWD || input.workspace.sourceCwd : process.env.PI_AGENT_CONFIG_CWD ?? "",
 			},
 			firstMessagePrefix: "You are a subagent spawned by another session.",
 		});
 
 		return this.adopt({ run, sessionID: input.sessionID, agent: input.agent.id,
-			description: input.description, parentSessionID: input.parentSessionID });
+			description: input.description, parentSessionID: input.parentSessionID, workspace: input.workspace });
 	}
 
 	/** Transfer the same live foreground child into the durable background registry. */
-	async adopt(input: { run: DetachedRun; sessionID: string; agent: string; description: string; parentSessionID?: string }): Promise<JobRecord> {
+	async adopt(input: { run: DetachedRun; sessionID: string; agent: string; description: string; parentSessionID?: string; workspace?: WorktreeWorkspace }): Promise<JobRecord> {
 		const run = input.run;
 		if (!/^[\w-]+$/.test(input.sessionID) || run.child.pid !== run.pid ||
 			path.resolve(run.outputPath) !== path.resolve(jobsDir(this.cwd), `${input.sessionID}.jsonl`)) {
@@ -177,6 +184,7 @@ export class JobRegistry {
 			outputPath: run.outputPath,
 			pid: run.pid,
 			...(run.backend ? { backend: run.backend } : {}),
+			...(input.workspace ? { workspace: input.workspace } : {}),
 		};
 		try {
 			await this.write(record);

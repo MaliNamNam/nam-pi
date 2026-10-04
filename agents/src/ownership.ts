@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SessionManager, withFileMutationQueue } from "@earendil-works/pi-coding-agent";
+import { validWorktree, type WorktreeWorkspace } from "./worktrees.ts";
 
 /** Persisted outside the conversation so child sessions can be checked after restart. */
 interface ChildOwner {
@@ -11,6 +12,7 @@ interface ChildOwner {
 	cwd: string;
 	agent: string;
 	description?: string;
+	workspace?: WorktreeWorkspace;
 	status?: "running" | "completed" | "error" | "cancelled";
 }
 
@@ -37,16 +39,29 @@ function ownerPath(context: OwnerContext, id: string): string {
 	return path.join(context.sessionDir, ".pi-agents-owners", `${id}.json`);
 }
 
+function ownedWorkspace(context: OwnerContext, id: string, workspace: unknown): workspace is WorktreeWorkspace {
+	return validWorktree(workspace) && workspace.sourceCwd === path.resolve(context.cwd) &&
+		workspace.path === path.resolve(context.sessionDir, ".pi-worktrees", id) && workspace.branch === `pi-agent/${id}`;
+}
+
+function matchesOwner(context: OwnerContext, owner: ChildOwner, id: string): boolean {
+	return !!owner && owner.id === id && owner.parentID === context.parentID && owner.parentFile === context.parentFile &&
+		owner.cwd === path.resolve(context.cwd) && typeof owner.agent === "string" &&
+		(owner.workspace === undefined || ownedWorkspace(context, id, owner.workspace));
+}
+
 /** Claim a newly generated id before spawning; never overwrite someone else's claim. */
-export async function claimChild(context: OwnerContext, id: string, agent: string, description?: string): Promise<void> {
+export async function claimChild(context: OwnerContext, id: string, agent: string, description?: string, workspace?: WorktreeWorkspace): Promise<void> {
 	const file = ownerPath(context, id);
-	if (SessionManager.findById(context.cwd, id, context.sessionDir)) {
+	if (workspace && !ownedWorkspace(context, id, workspace)) throw new Error("Worktree does not belong to this child");
+	if (SessionManager.findById(workspace?.cwd ?? context.cwd, id, context.sessionDir)) {
 		throw new Error(`Subagent session ID already exists: ${id}`);
 	}
 	await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
 	const owner: ChildOwner = {
 		id, parentID: context.parentID, parentFile: context.parentFile,
 		cwd: path.resolve(context.cwd), agent,
+		...(workspace ? { workspace } : {}),
 		...(description ? { description, status: "running" as const } : {}),
 	};
 	const handle = await fs.open(file, "wx", 0o600);
@@ -63,7 +78,7 @@ export async function claimChild(context: OwnerContext, id: string, agent: strin
 /** Only an exact child of this parent in this workspace/session store may resume. */
 export async function findOwnedChild(
 	context: OwnerContext, id: string,
-): Promise<{ file: string; agent: string } | undefined> {
+): Promise<{ file: string; agent: string; cwd: string; workspace?: WorktreeWorkspace } | undefined> {
 	if (!safeID(id)) return undefined;
 	let owner: ChildOwner;
 	try {
@@ -71,27 +86,24 @@ export async function findOwnedChild(
 	} catch {
 		return undefined;
 	}
-	if (
-		owner.id !== id || owner.parentID !== context.parentID ||
-		owner.parentFile !== context.parentFile ||
-		owner.cwd !== path.resolve(context.cwd) || typeof owner.agent !== "string"
-	) return undefined;
+	if (!matchesOwner(context, owner, id)) return undefined;
 	// --session-id creates a session if missing. Never continue with that flag:
 	// look up the exact persisted file and pass it via --session instead.
-	const file = SessionManager.findById(context.cwd, id, context.sessionDir);
+	const cwd = owner.workspace?.cwd ?? owner.cwd;
+	const file = SessionManager.findById(cwd, id, context.sessionDir);
 	if (!file || path.resolve(path.dirname(file)) !== path.resolve(context.sessionDir)) return undefined;
-	return { file, agent: owner.agent };
+	return { file, agent: owner.agent, cwd, ...(owner.workspace ? { workspace: owner.workspace } : {}) };
 }
 
 /** Per-discovery indexes: shared legacy stores are scanned once, asynchronously. */
 export interface ChildDiscovery {
 	claims: Map<string, Promise<ChildOwner[]>>;
-	sessions: Map<string, Promise<Map<string, string>>>;
+	sessions: Map<string, Promise<Map<string, { file: string; cwd: string }>>>;
 }
 export function childDiscovery(): ChildDiscovery { return { claims: new Map(), sessions: new Map() }; }
 
-async function sessionFiles(directory: string): Promise<Map<string, string>> {
-	const files = new Map<string, string>();
+async function sessionFiles(directory: string): Promise<Map<string, { file: string; cwd: string }>> {
+	const files = new Map<string, { file: string; cwd: string }>();
 	const entries = await fs.readdir(directory).catch(() => [] as string[]);
 	for (const name of entries) {
 		if (!name.endsWith(".jsonl")) continue;
@@ -102,7 +114,9 @@ async function sessionFiles(directory: string): Promise<Map<string, string>> {
 			const buffer = Buffer.alloc(16 * 1024);
 			const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
 			const header = JSON.parse(buffer.subarray(0, bytesRead).toString("utf8").split("\n", 1)[0]);
-			if (header?.type === "session" && typeof header.id === "string" && !files.has(header.id)) files.set(header.id, file);
+			if (header?.type === "session" && typeof header.id === "string" && typeof header.cwd === "string" && !files.has(header.id)) {
+				files.set(header.id, { file, cwd: path.resolve(header.cwd) });
+			}
 		} catch { /* incomplete or unrelated session headers are never adopted */ }
 		finally { await handle?.close(); }
 	}
@@ -126,6 +140,8 @@ async function readClaims(directory: string): Promise<ChildOwner[]> {
 export interface OwnedChildInfo {
 	id: string;
 	agent: string;
+	cwd: string;
+	workspace?: WorktreeWorkspace;
 	file?: string;
 	description?: string;
 	status?: ChildOwner["status"];
@@ -134,15 +150,19 @@ export interface OwnedChildInfo {
 export async function listOwnedChildren(context: OwnerContext, discovery = childDiscovery()): Promise<OwnedChildInfo[]> {
 	const directory = path.join(context.sessionDir, ".pi-agents-owners");
 	if (!discovery.claims.has(directory)) discovery.claims.set(directory, readClaims(directory));
-	const owners = (await discovery.claims.get(directory)!).filter((owner) => owner.parentID === context.parentID &&
-		owner.parentFile === context.parentFile && owner.cwd === path.resolve(context.cwd) && typeof owner.agent === "string");
+	const owners = (await discovery.claims.get(directory)!).filter((owner) => matchesOwner(context, owner, owner.id));
 	if (!owners.length) return [];
 	if (!discovery.sessions.has(context.sessionDir)) discovery.sessions.set(context.sessionDir, sessionFiles(context.sessionDir));
 	const files = await discovery.sessions.get(context.sessionDir)!;
-	return owners.map((owner) => ({ id: owner.id, agent: owner.agent, ...(files.has(owner.id) ? { file: files.get(owner.id) } : {}),
-		...(typeof owner.description === "string" ? { description: owner.description } : {}),
-		...(["running", "completed", "error", "cancelled"].includes(owner.status ?? "") ? { status: owner.status } : {}),
-	})).toSorted((a, b) => a.id.localeCompare(b.id));
+	return owners.map((owner) => {
+		const cwd = owner.workspace?.cwd ?? owner.cwd, session = files.get(owner.id);
+		return { id: owner.id, agent: owner.agent, cwd,
+			...(owner.workspace ? { workspace: owner.workspace } : {}),
+			...(session?.cwd === cwd ? { file: session.file } : {}),
+			...(typeof owner.description === "string" ? { description: owner.description } : {}),
+			...(["running", "completed", "error", "cancelled"].includes(owner.status ?? "") ? { status: owner.status } : {}),
+		};
+	}).toSorted((a, b) => a.id.localeCompare(b.id));
 }
 
 /** Relocate a settled, verified legacy child so it disappears from /resume. */
@@ -150,7 +170,7 @@ export async function migrateOwnedChild(from: OwnerContext, to: OwnerContext, id
 	if (from.parentID !== to.parentID || from.parentFile !== to.parentFile ||
 		path.resolve(from.cwd) !== path.resolve(to.cwd)) return false;
 	const owned = await findOwnedChild(from, id);
-	if (!owned || await findOwnedChild(to, id) || SessionManager.findById(to.cwd, id, to.sessionDir)) return false;
+	if (!owned || owned.workspace || await findOwnedChild(to, id) || SessionManager.findById(to.cwd, id, to.sessionDir)) return false;
 	await fs.mkdir(to.sessionDir, { recursive: true, mode: 0o700 });
 	const destination = path.join(to.sessionDir, path.basename(owned.file));
 	const newClaim = ownerPath(to, id);
@@ -185,8 +205,7 @@ async function mutateOwner(context: OwnerContext, id: string, update: (owner: Ch
 	await serializeOwnerWrite(file, () => withFileMutationQueue(file, async () => {
 		if (!current()) return;
 		const owner = JSON.parse(await fs.readFile(file, "utf8")) as ChildOwner;
-		if (!owner || owner.id !== id || owner.parentID !== context.parentID || owner.parentFile !== context.parentFile ||
-			owner.cwd !== path.resolve(context.cwd)) throw new Error("Child ownership changed");
+		if (!matchesOwner(context, owner, id)) throw new Error("Child ownership changed");
 		const updated = await update(owner);
 		if (!current()) return;
 		const temporary = `${file}.${process.pid}.${randomUUID()}.tmp`;
