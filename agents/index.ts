@@ -881,7 +881,7 @@ export default function agents(pi: ExtensionAPI): void {
 
 	registerTool({
 		name: "questionnaire", label: "Questions",
-		description: "Ask the user questions to clarify requirements or choose between options. A custom-answer option is added automatically. Questions from subagents are answered at the root session.",
+		description: "Ask clarification or choice questions. A custom answer is added automatically; subagent questions are answered in the root session.",
 		parameters: Type.Object({ questions: Type.Array(Type.Object({
 			question: Type.String(), header: Type.String(),
 			options: Type.Array(Type.Object({ label: Type.String(), description: Type.String() })),
@@ -971,13 +971,10 @@ export default function agents(pi: ExtensionAPI): void {
 		name: "subagent",
 		label: "Subagent",
 		description: [
-			"Spawns an agent in a child session to work on the specified task.",
-			"The output includes a sessionID you can pass back later to continue that specific conversation with the subagent.",
-			"New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
-			"Foreground (default) runs the subagent to completion and returns its final response.",
-			"Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
-			"Use foreground whenever your next step depends on the delegated findings.",
-			"Use background only when you have specific non-overlapping work to do while the subagent runs.",
+			"Delegate a task to a child session with fresh context; include relevant context and instructions.",
+			"Foreground (default) waits for the final response; use it when your next step depends on the findings.",
+			"background=true returns immediately and notifies on completion; use only alongside independent work.",
+			"The returned sessionID continues that child conversation.",
 		].join("\n"),
 		promptSnippet: "Delegate a task to a specialized subagent",
 		promptGuidelines: [
@@ -987,27 +984,23 @@ export default function agents(pi: ExtensionAPI): void {
 		],
 		parameters: Type.Object({
 			agent: Type.String({
-				description:
-					"The type of specialized agent to use for this task. If the user asks for a subagent by a name that is not one of the available subagents, they most likely mean a model: pick a suitable agent and pass the name through the model parameter instead.",
+				description: "Agent type from Available subagents. If a requested name is not listed, treat it as a model: choose a suitable agent and use model.",
 			}),
-			description: Type.String({ description: "A short 3-5 word label for the task, displayed to the user" }),
-			prompt: Type.String({ description: "The task for the subagent to perform" }),
+			description: Type.String({ description: "3-5 word task label shown to the user" }),
+			prompt: Type.String({ description: "Child task and necessary context/instructions" }),
 			model: Type.Optional(
 				Type.String({
-					description:
-						'NEVER set this unless the user explicitly asks for a particular model or variant. The value is written as "providerID/modelID", or "providerID/modelID#variant" to include a variant. Do not guess the ID.',
+					description: "Only set when the user explicitly requests a model/variant. Use providerID/modelID or providerID/modelID#variant; never guess IDs.",
 				}),
 			),
 			sessionID: Type.Optional(
 				Type.String({
-					description:
-						"Continue a specific previous subagent conversation by passing its sessionID. Calls without a sessionID start a new conversation.",
+					description: "Continue this child session; omit to start a new conversation.",
 				}),
 			),
 			background: Type.Optional(
 				Type.Boolean({
-					description:
-						"Run the subagent in the background and return immediately. You will be notified when it completes. DO NOT sleep, poll, or proactively check on its progress.",
+					description: "Default false (foreground). true returns immediately; completion is announced. Do not sleep, poll, or proactively check progress.",
 				}),
 			),
 		}),

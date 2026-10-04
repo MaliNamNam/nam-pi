@@ -56,6 +56,7 @@ Everything the current setup loads, and where it lives in this repo:
 - Each package extension has its own `README.md` with details.
 - `mac-terminal-frame.ts` automatically frames extension tools, including late registrations and saved calls. Custom renderers and tool execution are preserved. Its guarded Pi UI hook runs only in TUI mode and warns if a Pi update makes it unavailable.
 - Frame regression tests: `node --test test/mac-terminal-frame.test.mjs` (set `PI_TEST_PACKAGE_DIR` to Pi's package directory when Pi is installed globally).
+- Prompt-budget tests: `node --test test/prompt-budget.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Checks compact agent-tool guidance while preserving tool availability and parameter contracts.
 - `node_modules/` is gitignored; run `npm install` inside `agents/`, `safeguards/` and `pi-side-panel/` as needed.
 - Third-party npm packages are pinned in `~/.pi/agent/settings.json` and live in `~/.pi/agent/npm/` — nothing from them is committed here.
 - Attribution for adapted third-party code is in each extension's license file or header comment.
