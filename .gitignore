@@ -19,6 +19,7 @@ build/
 
 # Test / run artifacts (contain local paths, timestamps)
 agents/test/results/
+.pi/agents/
 
 # OS junk
 .DS_Store

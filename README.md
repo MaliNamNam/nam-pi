@@ -11,7 +11,7 @@ Loaded from `~/.pi/agent/extensions`.
 | `agents/` | package | Subagent extension — spawn child pi sessions (`::explore`, `@agent`, parallel work) |
 | `safeguards/` | package | Safety extension — destructive-command confirm gates and allowlists |
 | `pi-side-panel/` | package | Side panel — themes, extensions and tooling for a dockable panel |
-| `mac-terminal-frame.ts` | single-file | Renders file/search tool calls in a macOS Terminal.app–style frame |
+| `mac-terminal-frame.ts` | single-file | Frames built-in and extension tool calls in a macOS Terminal.app–style window |
 | `pi-models.ts` | single-file | Model/provider config from `pi.jsonc` (local `pi-models.ts` extension) |
 | `pi-splash.ts` | single-file | Splash screen while pi starts up |
 | `quiet-chrome.ts` | single-file | Trims pi's default TUI chrome for a quieter UI |
@@ -54,6 +54,8 @@ Everything the current setup loads, and where it lives in this repo:
 ## Notes
 
 - Each package extension has its own `README.md` with details.
+- `mac-terminal-frame.ts` automatically frames extension tools, including late registrations and saved calls. Custom renderers and tool execution are preserved. Its guarded Pi UI hook runs only in TUI mode and warns if a Pi update makes it unavailable.
+- Frame regression tests: `node --test test/mac-terminal-frame.test.mjs` (set `PI_TEST_PACKAGE_DIR` to Pi's package directory when Pi is installed globally).
 - `node_modules/` is gitignored; run `npm install` inside `agents/`, `safeguards/` and `pi-side-panel/` as needed.
 - Third-party npm packages are pinned in `~/.pi/agent/settings.json` and live in `~/.pi/agent/npm/` — nothing from them is committed here.
 - Attribution for adapted third-party code is in each extension's license file or header comment.

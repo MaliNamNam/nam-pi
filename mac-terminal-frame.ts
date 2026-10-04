@@ -1,7 +1,7 @@
 /**
  * macOS Terminal Frame
  * ----------------------------------------------------------------------------
- * Renders pi's file and search tool calls inside a window that mimics the
+ * Renders pi's tool calls inside a window that mimics the
  * macOS Terminal.app look: a title bar with red/yellow/green traffic lights and
  * a rounded box-drawing frame around the command and its output.
  *
@@ -16,9 +16,12 @@
  *
  * How it works
  * ------------
- * Each built-in tool is re-registered under the same name, spreading the
- * original definition so execution is untouched and overriding only the
- * renderers. `renderShell: "self"` stops pi drawing its own box, so the tool
+ * File/search tools retain their specialised renderers. A guarded, TUI-only
+ * ToolExecutionComponent hook frames every other tool at display time, including
+ * extension tools registered later and historical calls without a definition.
+ * Existing custom renderers keep their state and components; registrations,
+ * execution, schemas and tool activation are never changed by the hook.
+ * `renderShell: "self"` stops pi drawing its own box, so the tool
  * owns the framing. With "self", pi stacks the call renderer and the result
  * renderer in one plain container, so `renderCall` draws the top half of the
  * window (border + title bar + separator + prompt) and `renderResult` draws the
@@ -31,7 +34,7 @@
  * Or drop it in ~/.pi/agent/extensions/ to load it automatically.
  */
 
-import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	createEditToolDefinition,
 	createFindToolDefinition,
@@ -39,6 +42,7 @@ import {
 	createLsToolDefinition,
 	createReadToolDefinition,
 	createWriteToolDefinition,
+	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import {
@@ -71,6 +75,10 @@ const DEL = rgbColor(255, 95, 86);
 const COLLAPSED_ROWS = 20;
 /** Hard ceiling when expanded, so huge output cannot stall the render path. */
 const EXPANDED_ROWS = 400;
+
+/** Shared with the agents extension's shell frames; stable across /reload. */
+const FRAMED = Symbol.for("nam-pi.mac-terminal-frame.framed");
+const FRAME_HOOK = Symbol.for("nam-pi.mac-terminal-frame.hook");
 
 // ---------------------------------------------------------------------------
 // Text sanitising
@@ -272,11 +280,9 @@ class Frame implements Component {
 
 /** Reuse one Frame per render slot instead of allocating on every update. */
 function useFrame(context: { state: Record<string, unknown> }, key: string, build: Builder): Frame {
-	let frame = context.state[key];
-	if (!(frame instanceof Frame)) {
-		frame = new Frame();
-		context.state[key] = frame;
-	}
+	const existing = context.state[key];
+	const frame = existing instanceof Frame ? existing : new Frame();
+	context.state[key] = frame;
 	frame.set(build);
 	return frame;
 }
@@ -415,11 +421,135 @@ function callFrame(
 }
 
 // ---------------------------------------------------------------------------
+// Display-only adapter for extension tools
+// ---------------------------------------------------------------------------
+
+type ToolRenderers = Pick<ToolDefinition, "renderCall" | "renderResult" | "renderShell"> & { [FRAMED]?: boolean };
+
+/** Wrap the original component rather than replacing an extension's renderer. */
+class FramedComponent implements Component {
+	private contentHeight = 0;
+
+	constructor(
+		readonly child: Component | undefined,
+		private readonly theme: Theme,
+		private readonly expanded: boolean,
+		private readonly title?: string,
+		private readonly running = false,
+		private readonly isError = false,
+	) {}
+
+	render(width: number): string[] {
+		const narrow = width < 12;
+		const mode = this.theme.getColorMode();
+		const rows = (this.child?.render(narrow ? width : width - 4) ?? [])
+			.flatMap((row) => sanitizeForFrame(row).split("\n"));
+		const cap = this.expanded ? EXPANDED_ROWS : COLLAPSED_ROWS;
+		this.contentHeight = Math.min(rows.length, cap);
+		const draw = (row: string) => narrow
+			? truncateToWidth(stripAnsi(row), width, "…", true)
+			: styledContentRow(width, row, mode);
+		const lines = this.title === undefined || narrow ? [] : [
+			borderRow(width, "╭", "╮", mode),
+			titleRow(width, sanitizeForFrame(this.title), mode),
+			borderRow(width, "├", "┤", mode),
+		];
+		lines.push(...rows.slice(0, cap).map(draw));
+		if (rows.length > cap) lines.push(draw(`… ${rows.length - cap} more lines (ctrl+e to expand)`));
+		if (this.title === undefined) {
+			if (this.running) lines.push(draw("● running…"));
+			else {
+				if (this.isError) lines.push(draw(`${foregroundAnsi(DEL, mode)}✗ failed`));
+				if (!narrow) lines.push(borderRow(width, "╰", "╯", mode));
+			}
+		}
+		return lines;
+	}
+
+	invalidate(): void { this.child?.invalidate(); }
+
+	handleInput(data: string): void { this.child?.handleInput?.(data); }
+
+	handleMouse(event: Parameters<NonNullable<Component["handleMouse"]>>[0]): ReturnType<NonNullable<Component["handleMouse"]>> {
+		const narrow = event.width < 12;
+		const y = event.y - (this.title !== undefined && !narrow ? 3 : 0);
+		const x = event.x - (narrow ? 0 : 2);
+		const width = narrow ? event.width : event.width - 4;
+		if (y < 0 || y >= this.contentHeight || x < 0 || x >= width) return undefined;
+		return this.child?.handleMouse?.({ ...event, x, y, width, height: this.contentHeight });
+	}
+}
+
+interface ToolDisplay {
+	toolName: string;
+	toolDefinition?: ToolRenderers;
+	hasRendererDefinition(): boolean;
+	createCallFallback(): Component;
+	createResultFallback(): Component | undefined;
+}
+
+/** Pi has no public cross-tool renderer hook. Guard this single internal seam. */
+function installToolFrames(): (() => void) | undefined {
+	const prototype = ToolExecutionComponent.prototype as unknown as ToolDisplay & { [FRAME_HOOK]?: () => void };
+	if ([prototype.hasRendererDefinition, prototype.createCallFallback, prototype.createResultFallback]
+		.some((method) => typeof method !== "function")) return undefined;
+
+	prototype[FRAME_HOOK]?.();
+	const original = prototype.hasRendererDefinition;
+	const innerContext = <T extends { lastComponent: Component | undefined }>(context: T): T => ({
+		...context,
+		lastComponent: context.lastComponent instanceof FramedComponent ? context.lastComponent.child : context.lastComponent,
+	});
+	const patched = function (this: ToolDisplay): boolean {
+		if (!this.toolDefinition?.[FRAMED]) {
+			const definition = this.toolDefinition;
+			// Clone only this display instance. Never mutate or re-register another tool.
+			this.toolDefinition = {
+				...definition,
+				[FRAMED]: true,
+				renderShell: "self",
+				renderCall: (args, theme, context) => {
+					let child: Component;
+					try { child = definition?.renderCall?.(args, theme, innerContext(context)) ?? this.createCallFallback(); }
+					catch { child = this.createCallFallback(); }
+					return new FramedComponent(child, theme, context.expanded, this.toolName);
+				},
+				renderResult: (result, options, theme, context) => {
+					let child: Component | undefined;
+					try { child = definition?.renderResult?.(result, options, theme, innerContext(context)) ?? this.createResultFallback(); }
+					catch { child = this.createResultFallback(); }
+					return new FramedComponent(child, theme, options.expanded, undefined, options.isPartial, context.isError);
+				},
+			};
+		}
+		return original.call(this);
+	};
+	prototype.hasRendererDefinition = patched;
+	const uninstall = () => {
+		if (prototype.hasRendererDefinition === patched) prototype.hasRendererDefinition = original;
+		if (prototype[FRAME_HOOK] === uninstall) delete prototype[FRAME_HOOK];
+	};
+	prototype[FRAME_HOOK] = uninstall;
+	return uninstall;
+}
+
+// ---------------------------------------------------------------------------
 // Extension
 // ---------------------------------------------------------------------------
 
 export default function (pi: ExtensionAPI) {
 	const cwd = process.cwd();
+	const registerTool: ExtensionAPI["registerTool"] = (definition) => {
+		const framed = { ...definition, [FRAMED]: true };
+		pi.registerTool(framed);
+	};
+	let uninstall: (() => void) | undefined;
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode !== "tui") return;
+		uninstall = installToolFrames();
+		if (!uninstall) ctx.ui.notify("mac-terminal-frame: Pi's tool UI changed; automatic tool frames are unavailable.", "warning");
+	});
+	pi.on("session_shutdown", () => { uninstall?.(); });
 
 	// bash and powershell are NOT registered here. The `agents` extension already
 	// registers both to wrap their execution for shell tracking, and pi resolves a
@@ -431,7 +561,7 @@ export default function (pi: ExtensionAPI) {
 	// read: cat, with syntax colour from the tool preserved
 	// -----------------------------------------------------------------------
 	const originalRead = createReadToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalRead,
 		renderShell: "self",
 
@@ -467,7 +597,7 @@ export default function (pi: ExtensionAPI) {
 	// edit: diff with add/remove colouring
 	// -----------------------------------------------------------------------
 	const originalEdit = createEditToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalEdit,
 		renderShell: "self",
 
@@ -512,7 +642,7 @@ export default function (pi: ExtensionAPI) {
 	// write: path, line count, optional content preview
 	// -----------------------------------------------------------------------
 	const originalWrite = createWriteToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalWrite,
 		renderShell: "self",
 
@@ -558,7 +688,7 @@ export default function (pi: ExtensionAPI) {
 	// pi keeps it active and it simply renders framed.
 	// -----------------------------------------------------------------------
 	const originalGrep = createGrepToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalGrep,
 		defaultActive: false,
 		renderShell: "self",
@@ -583,7 +713,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	const originalFind = createFindToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalFind,
 		defaultActive: false,
 		renderShell: "self",
@@ -604,7 +734,7 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	const originalLs = createLsToolDefinition(cwd);
-	pi.registerTool({
+	registerTool({
 		...originalLs,
 		defaultActive: false,
 		renderShell: "self",

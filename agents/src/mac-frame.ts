@@ -374,6 +374,7 @@ const PROMPTS: Record<ShellToolName, string> = { bash: "$", powershell: ">" };
 export function shellFrameRenderers(name: ShellToolName) {
 	const prompt = PROMPTS[name];
 	return {
+		[Symbol.for("nam-pi.mac-terminal-frame.framed")]: true,
 		renderShell: "self" as const,
 
 		renderCall(args: { command?: string }, theme: Theme, context: { state: Record<string, unknown> }): Component {
