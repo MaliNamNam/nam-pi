@@ -229,7 +229,7 @@ export default function agents(pi: ExtensionAPI): void {
 			return policies;
 		},
 		prompt: async (event, ctx, assessment, signal) => requestForm(await formsRoute(ctx), ctx.sessionManager.getSessionId(),
-			{ kind: "permission", tool: event.toolName, reason: assessment.reason ?? "Permission requires approval", checks: assessment.checks }, signal, 60_000, interactions.id),
+			{ kind: "permission", tool: event.toolName, reason: assessment.reason ?? "Permission requires approval", checks: assessment.checks }, signal, interactions.id),
 		onDeclined: (_event, ctx, signal) => { interactions.decline(ctx, interactions.id, "permission", signal); },
 	});
 	pi.events?.on(APPROVAL_BRIDGE, (data) => {
@@ -870,7 +870,7 @@ export default function agents(pi: ExtensionAPI): void {
 			if (steps.reached) return failure(TOOLS_DISABLED_MESSAGE);
 			const interactionID = interactions.id;
 			const aborted = AbortSignal.any([sessionAborter.signal, interactions.signal, ...(signal ? [signal] : [])]);
-			const response = await requestForm(await formsRoute(ctx), ctx.sessionManager.getSessionId(), { kind: "question", questions: params.questions }, aborted, 300_000, interactionID);
+			const response = await requestForm(await formsRoute(ctx), ctx.sessionManager.getSessionId(), { kind: "question", questions: params.questions }, aborted, interactionID);
 			if (response.reply === "reject" || !response.answers || aborted.aborted) {
 				if (response.reason === "declined") interactions.decline(ctx, interactionID, "question", aborted);
 				return failure(response.reason === "declined" ? "The user dismissed this question" : "Questions cancelled or root UI unavailable");

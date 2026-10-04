@@ -162,9 +162,9 @@ export class FormHost {
 	}
 }
 
-/** Replies are bound to a fresh root route and a random per-call ID, never a saved PID. */
+/** Wait for a reply or cancellation while the root route stays live, never expiring for user inactivity. */
 export async function requestForm(route: string | undefined, sessionID: string, payload: FormPayload,
-	signal?: AbortSignal, timeout = 60_000, interactionID?: string): Promise<FormReply> {
+	signal?: AbortSignal, interactionID?: string): Promise<FormReply> {
 	let directory: string;
 	try {
 		directory = JSON.parse(route ?? "")?.directory;
@@ -179,8 +179,7 @@ export async function requestForm(route: string | undefined, sessionID: string, 
 	try {
 		await fs.writeFile(temporary, JSON.stringify({ id, sessionID, payload, interactionID }), { flag: "wx", mode: 0o600 });
 		await fs.rename(temporary, request);
-		const until = Date.now() + timeout;
-		do {
+		while (true) {
 			if (signal?.aborted) return CANCELLED;
 			if (!await fresh(path.join(directory, "lease"))) return REJECT;
 			try {
@@ -192,8 +191,7 @@ export async function requestForm(route: string | undefined, sessionID: string, 
 			} catch { /* wait for the root UI */ }
 			await fs.utimes(request, new Date(), new Date());
 			await new Promise((resolve) => setTimeout(resolve, 100));
-		} while (Date.now() < until);
-		return { reply: "reject", reason: "timeout" };
+		}
 	} catch { return signal?.aborted ? CANCELLED : REJECT; }
 	finally { await Promise.all([request, reply, temporary, acknowledgement].map((file) => fs.rm(file, { force: true }).catch(() => {}))); }
 }
