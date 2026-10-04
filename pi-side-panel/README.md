@@ -243,6 +243,21 @@ The extension also replaces the header, the footer, and the editor:
 - **Footer** — carries *only* what the composer cannot, so the same facts are
   never rendered twice. It is empty when there is nothing to report.
 
+### Conversation frames
+
+User prompts sit on the right with a three-column left gutter and a `👤` title
+inscribed at the right of the rounded top border. Assistant replies (`🤖`) and
+thoughts (`🧠`) sit on the left with a matching right gutter and left-edge titles.
+These reuse the Summary panel's border helpers and keep Pi's Markdown rendering,
+streaming, and click-to-toggle thoughts intact, including in child sessions.
+Collapsed thoughts show only a standalone `🧠`: click it to reveal that block,
+and click its framed `🧠` title to hide it again. Each block toggles independently,
+with the emoji at the same horizontal position in both states.
+Gutters shrink on narrow terminals; very narrow views omit the frame.
+
+The display-only hook runs only in TUI mode, restores native rendering on
+shutdown, and warns if a Pi update makes the component hook unavailable.
+
 ### Subagents
 
 Subagents now appear **below Context, separated by a rule**, not in the footer.

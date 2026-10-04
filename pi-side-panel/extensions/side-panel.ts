@@ -24,6 +24,7 @@ import { VERSION } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Sidebar } from "./slate/sidebar.ts";
+import { installConversationFrames } from "./slate/conversation-frames.ts";
 import { GitStatusPoller } from "./slate/git-status.ts";
 import { TurnImpactTracker } from "./slate/turn-impact.ts";
 import { resolveContextTokens, sessionSpend } from "./slate/context-usage.ts";
@@ -138,6 +139,7 @@ export default function sidePanelExtension(pi: ExtensionAPI): void {
 	const sidebar = new Sidebar();
 	let ctxRef: ExtensionContext | undefined;
 	let activeTui: TUI | undefined;
+	let uninstallConversationFrames: (() => void) | undefined;
 	let panelOpen = true;
 	let turnStartedAt = 0;
 	let turnStartOutput = 0;
@@ -372,6 +374,8 @@ export default function sidePanelExtension(pi: ExtensionAPI): void {
 		if (ctx.mode !== "tui") return;
 		ctxRef = ctx;
 		themeSource = () => getContext().ui.theme;
+		uninstallConversationFrames = installConversationFrames(() => getContext().ui.theme);
+		if (!uninstallConversationFrames) ctx.ui.notify("side-panel: Pi's message UI changed; conversation frames are unavailable.", "warning");
 		workspaceEditor = undefined;
 		connectComposer = undefined;
 		linkedController = undefined;
@@ -466,6 +470,8 @@ export default function sidePanelExtension(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", () => {
+		uninstallConversationFrames?.();
+		uninstallConversationFrames = undefined;
 		detachResourceKeys?.();
 		detachResourceKeys = undefined;
 		files.dispose();
