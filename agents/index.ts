@@ -97,9 +97,11 @@ export default function agents(pi: ExtensionAPI): void {
 	/** Whether the extension runtime is still live enough to deliver messages. */
 	let runtimeActive = true;
 	/** Prevent concurrent timer/turn collectors from delivering the same record twice. */
-	let deliveryInFlight = false;
+	let deliveryInFlight: Promise<void> | undefined;
 	let deliveryTimer: ReturnType<typeof setInterval> | undefined;
 	let hasFinishedTurn = false;
+	/** Retain the run's signal so idle delivery cannot resume a cancelled run. */
+	let deliverySignal: AbortSignal | undefined;
 	let sessionGeneration = 0;
 	let parentSessionID: string | undefined;
 	const pendingNotices = new Map<string, {
@@ -325,16 +327,18 @@ export default function agents(pi: ExtensionAPI): void {
 	 *
 	 * OpenCode's `SubagentCompletion.deliver` sends a `<subagent>` message into
 	 * the parent session. Background runs are file-backed, so their outcome is read
-	 * from disk after a turn and periodically while idle. No completion is
-	 * injected at session start before the user's first input.
+	 * from disk between successful turns and periodically while idle. No completion
+	 * is injected at session start or used to resume an aborted/failed run.
 	 *
 	 * A failure to deliver must not disable the feature for the rest of the
 	 * session, so the record is left on disk and retried on the next trigger.
 	 * Only a genuinely stale runtime stops further attempts.
 	 */
-	const deliverCompletions = async (generation: number): Promise<void> => {
-		if (!runtimeActive || !hasFinishedTurn || deliveryInFlight) return;
-		deliveryInFlight = true;
+	const collectCompletions = async (generation: number, deliverAs: "steer" | "followUp"): Promise<void> => {
+		const signal = deliverySignal;
+		const eligible = () => runtimeActive && hasFinishedTurn && sessionGeneration === generation &&
+			signal === deliverySignal && !signal?.aborted;
+		if (!eligible()) return;
 		const registry = jobs;
 		const owner = parentSessionID;
 		try {
@@ -342,14 +346,14 @@ export default function agents(pi: ExtensionAPI): void {
 			for (const outcome of outcomes) {
 				// A session switch can happen during disk I/O. Never inject a child's
 				// result into the new session or mark it delivered in the old one.
-				if (!runtimeActive || sessionGeneration !== generation) return;
+				if (!eligible()) return;
 				const { record } = outcome;
 				for (const [key, receipt] of receiptRuns) {
 					if (receipt.id !== record.id || receipt.owner.parentID !== owner) continue;
 					await agentMetadata.get(key)?.catch(() => {});
 					record.agent = receipt.child.agent ?? record.agent;
 				}
-				if (!runtimeActive || sessionGeneration !== generation) return;
+				if (!eligible()) return;
 				// Pi's sendMessage API returns void; only the custom message_end event
 				// proves that the completion was appended to the parent session.
 				if (acknowledgedChildren.has(record.id)) {
@@ -383,7 +387,7 @@ export default function agents(pi: ExtensionAPI): void {
 					model: outcome.model,
 							},
 						},
-						{ triggerTurn: true, deliverAs: "followUp" },
+						{ triggerTurn: true, deliverAs },
 					);
 				} catch (error) {
 					clearTimeout(timer);
@@ -395,9 +399,21 @@ export default function agents(pi: ExtensionAPI): void {
 			}
 		} catch {
 			// I/O errors must not break the command surface; retry on the next tick.
-		} finally {
-			deliveryInFlight = false;
 		}
+	};
+
+	const deliverCompletions = async (generation: number, deliverAs: "steer" | "followUp" = "followUp"): Promise<void> => {
+		const signal = deliverySignal;
+		while (deliveryInFlight) {
+			if (deliverAs !== "steer") return;
+			// A boundary must finish collecting before the next provider request.
+			await deliveryInFlight;
+		}
+		if (signal !== deliverySignal) return;
+		const work = collectCompletions(generation, deliverAs);
+		deliveryInFlight = work;
+		try { await work; }
+		finally { deliveryInFlight = undefined; }
 	};
 
 	const reloadAgents = (context: ExtensionContext): void => {
@@ -558,6 +574,7 @@ export default function agents(pi: ExtensionAPI): void {
 			.filter((id): id is string => typeof id === "string") ?? []);
 		runtimeActive = true;
 		hasFinishedTurn = false;
+		deliverySignal = undefined;
 		parentSessionID = ctx.sessionManager.getSessionId();
 		tuiContext = ctx.mode === "tui" ? ctx : undefined;
 		uiController = undefined;
@@ -648,9 +665,9 @@ export default function agents(pi: ExtensionAPI): void {
 				}
 			});
 		}
-		// Wait for a user turn before delivering old completions: a startup
-		// message can preempt the user's first prompt. Once idle, poll for jobs
-		// that settle later (agent_settled only fires at the end of a turn).
+		// Wait for a successful user turn before delivering old completions: a
+		// startup message can preempt the first prompt. Poll while idle for jobs
+		// that finish after the parent's last turn boundary.
 		deliveryTimer = setInterval(() => {
 			if (ctx.isIdle()) void deliverCompletions(sessionGeneration);
 			void refreshComposer(ctx, sessionGeneration);
@@ -693,10 +710,14 @@ export default function agents(pi: ExtensionAPI): void {
 		await shellRuns.dispose();
 	});
 
-	// Background runs settle after the dispatching turn, so completions are
-	// collected once the agent has no more work of its own.
+	// Steering enters after this assistant/tool batch, before the next request.
+	pi.on("turn_end", async (event, ctx) => {
+		hasFinishedTurn = event.outcome === "completed";
+		deliverySignal = ctx.signal;
+		await deliverCompletions(sessionGeneration, "steer");
+	});
+	// Catch results finishing after the last turn; aborted/failed runs stay paused.
 	pi.on("agent_settled", () => {
-		hasFinishedTurn = true;
 		void deliverCompletions(sessionGeneration);
 	});
 
@@ -705,6 +726,8 @@ export default function agents(pi: ExtensionAPI): void {
 	/* -------------------------------------------------------------- */
 
 	pi.on("before_agent_start", (_event, ctx) => {
+		hasFinishedTurn = false;
+		deliverySignal = ctx.signal;
 		interactions.begin();
 		if (agents.length === 0) reloadAgents(ctx);
 		applyToolPolicy();
@@ -953,11 +976,13 @@ export default function agents(pi: ExtensionAPI): void {
 			"New child sessions start with fresh context, so include all relevant context and instructions when you don't pass a sessionID.",
 			"Foreground (default) runs the subagent to completion and returns its final response.",
 			"Background mode (background=true) launches it asynchronously and returns immediately; you are notified when it finishes.",
-			"Use background only for independent work that can run while you continue elsewhere.",
+			"Use foreground whenever your next step depends on the delegated findings.",
+			"Use background only when you have specific non-overlapping work to do while the subagent runs.",
 		].join("\n"),
 		promptSnippet: "Delegate a task to a specialized subagent",
 		promptGuidelines: [
-			"Use the subagent tool to delegate independent work; it runs in a separate context window.",
+			"Use foreground when your next step depends on delegated findings; use background only for specific non-overlapping work.",
+			"Do not repeat delegated exploration; use its result, then read only what implementation or verification requires.",
 			"Do not poll or sleep while a background subagent runs; you are notified when it finishes.",
 		],
 		parameters: Type.Object({

@@ -126,7 +126,7 @@ The combined root dialog's **Always for this Pi session** still grants only the 
 
 ## Foreground and background
 
-**Foreground** (default) waits for a child Pi process while its event stream is recorded to a file. The normal TUI shows one inline delegation row; Ctrl+O expands diagnostic progress, and opening the child page shows live output. Ctrl+B releases the foreground wait and adopts the **same** process into the job registry, so the parent can handle other work while Pi remains open. Interrupting the child cancels only its foreground wait; the parent can continue after the tool failure. The final text comes back wrapped in OpenCode's envelope:
+**Foreground** (default) waits for a child Pi process while its event stream is recorded to a file. Use it when your next step depends on the delegated findings. The normal TUI shows one inline delegation row; Ctrl+O expands diagnostic progress, and opening the child page shows live output. Ctrl+B releases the foreground wait and adopts the **same** process into the job registry, so the parent can handle other work while Pi remains open. Interrupting the child cancels only its foreground wait; the parent can continue after the tool failure. The final text comes back wrapped in OpenCode's envelope:
 
 ```xml
 <subagent sessionID="sub-explore-..." state="completed">
@@ -134,14 +134,14 @@ The combined root dialog's **Always for this Pi session** still grants only the 
 </subagent>
 ```
 
-**Background** (`background=true`) starts a child and returns immediately with a background notice. The composer count and its job list track foreground/background children; the child transcript page refreshes only when its output changes. After the parent has completed its first turn, a finished child is delivered as a `<subagent>` message to that same session. While idle, the extension checks for results every two seconds. **All children belong to their owning Pi session and stop on shutdown**, including quitting, reloading extensions or replacing the session. Backgrounding does not create an independent daemon:
+**Background** (`background=true`) starts a child and returns immediately with a background notice. Use it only when you have specific non-overlapping work to do; do not repeat delegated exploration. Reading specific files afterward for implementation or verification is still appropriate. The composer count and its job list track foreground/background children; the child transcript page refreshes only when its output changes. At successful assistant/tool turn boundaries, finished children are delivered as `<subagent>` steering messages to that same session before its next model request. Results finishing later are also collected at settlement and every two seconds while idle. Aborted or failed runs stay paused until a later successful user turn; completions never preempt the first user prompt. **All children belong to their owning Pi session and stop on shutdown**, including quitting, reloading extensions or replacing the session. Backgrounding does not create an independent daemon:
 
 ```
 The subagent is working in the background (sessionID: ...). You will be notified automatically when it finishes.
 DO NOT sleep, poll for progress, ask the subagent for status, or duplicate this subagent's work; ...
 ```
 
-Completed jobs from a prior process are collected after the first agent turn (not at session start, to avoid preempting the first user input). Work interrupted by shutdown is reported as cancelled, not revived on reopening. Delivery also runs after subsequent turns and during idle polling. A job is marked delivered only after Pi emits the completion's persisted `message_end`; on reopening, existing session entries suppress a duplicate if Pi closed between appending the message and marking the job. This improves durability but is not an exactly-once transaction. A completed job owned by another parent session stays pending until that session is reopened. Legacy jobs without an owner can be delivered in any session in the workspace.
+Completed jobs from a prior process are collected after the first successful agent turn (not at session start, to avoid preempting the first user input). Work interrupted by shutdown is reported as cancelled, not revived on reopening. Delivery also runs after subsequent successful turns, at settlement and during idle polling. A job is marked delivered only after Pi emits the completion's persisted `message_end`; on reopening, existing session entries suppress a duplicate if Pi closed between appending the message and marking the job. This improves durability but is not an exactly-once transaction. A completed job owned by another parent session stays pending until that session is reopened. Legacy jobs without an owner can be delivered in any session in the workspace.
 
 ### Stream responsiveness
 
@@ -350,6 +350,8 @@ npm install
 npm run typecheck
 npm test
 ```
+
+`test/completion-delivery.test.ts` covers boundary/idle collection, startup gating, cancellation/error pauses, session-switch and collector races, persisted acknowledgements and delegation guidance. `test/completion-runtime.test.ts` runs a real Pi parent against a local mock endpoint to verify next-request ordering and no extra settlement request; it uses synthetic child output and launches no subagents.
 
 Unit and behavioral tests cover agent definitions, configuration, permissions, child arguments, background delivery and cancellation, provider options, and switching primary agents. Run `node test/live-rpc.mjs` to verify `/agents` and `/agents running` with empty, unrelated, and stale job records against a live Pi RPC process. Run `node test/live-continuation.mjs` to check Pi's exact-file continuation and project-scope handoff. Run `node test/live-plan-resume.mjs` to verify restored Plan/Build mode across real session switches and process restarts. Run `node test/live-subagent.mjs` for parent→child dispatch, model selection, hidden child storage, live viewing, background delivery, foreground/background interruption, transferring the same foreground child while Pi is open, and stopping owned children on parent exit against an isolated local mock endpoint (no real-provider traffic). Run `node test/live-path-rules.mjs` to exercise real Pi writes against relative, absolute, dot-segment, file-URL, `@` and junction aliases; the protected file must remain unchanged while an allowed public write succeeds. `test/composer*.test.ts` checks the normal OpenCode layout, controls and click entry points. `test/tui-render.test.ts` exercises the composer and full-page child navigation through Pi's regular and fullscreen terminal renderers with a memory terminal. Repeat with `PI_AGENT_STRICT_SHELL=1` to verify the child tool allowlist excludes shell tools. RPC clients must keep stdin open until the command response arrives: closing it early asks Pi to shut down while an asynchronous command may still be running.
 
