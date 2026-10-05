@@ -66,6 +66,7 @@ export type SidebarContextData = {
  */
 export type SidebarSubagent = {
   id: string;
+  parentID?: string;
   agent: string;
   title: string;
   status: "running" | "completed" | "error" | "cancelled";
@@ -222,10 +223,13 @@ export class Sidebar implements Component {
   }
 
   setSubagents(children: SidebarSubagent[]): void {
-    if (JSON.stringify(children) === JSON.stringify(this.subagents)) return;
+    const visible = children.filter((child) => child.status !== "cancelled" || !child.parentID || !children.some((sibling) =>
+      sibling.parentID === child.parentID && sibling.agent === child.agent && sibling.title === child.title &&
+      (sibling.status === "running" || sibling.status === "completed")));
+    if (JSON.stringify(visible) === JSON.stringify(this.subagents)) return;
     const anchor = this.subagents[this.subagentsOffset]?.id;
-    this.subagents = children.map((child) => ({ ...child }));
-    const offset = children.findIndex((child) => child.id === anchor);
+    this.subagents = visible.map((child) => ({ ...child }));
+    const offset = visible.findIndex((child) => child.id === anchor);
     this.subagentsOffset = offset >= 0 ? offset : 0;
     this.contentCached = undefined;
     this.tui?.requestRender();
@@ -535,10 +539,8 @@ export class Sidebar implements Component {
         this.actions.viewSubagent(child.id);
         return { handled: true };
       }
-      // Only an occupied section opens the subagents view: with no jobs the
-      // composer would open empty, which is what the editor's `hasJobs` gate
-      // already prevents for the Down key.
-      if (event.y === this.subagentHeading && this.subagents.length > 0 && this.actions?.openSubagents) {
+      // Role/model assignments are configurable even before the first child starts.
+      if (event.y === this.subagentHeading && this.actions?.openSubagents) {
         this.actions.openSubagents();
         return { handled: true };
       }

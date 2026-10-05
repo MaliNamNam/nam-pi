@@ -176,6 +176,7 @@ export default function sidePanelExtension(pi: ExtensionAPI): void {
 		sidebar.setHidden(true);
 		request.component = new ChildWorkspacePage(request, ctxRef, {
 			hidden: () => !panelOpen, width: () => sidebar.preferredWidth,
+			openSubagentModels: () => agentUI?.openSubagentModels(),
 			branch: () => gitBranch, files: () => latestFiles, resources: () => resourceCatalog,
 			// A child pane shares the root's catalog and settings file, so a toggle
 			// there has to refresh the root's counts too, or the two panels would
@@ -393,7 +394,7 @@ export default function sidePanelExtension(pi: ExtensionAPI): void {
 				sidebar.setPreferredWidth(percent);
 			},
 			viewSubagent: (id) => agentUI?.viewChild(id),
-			openSubagents: () => workspaceEditor?.openSubagents(),
+			openSubagents: () => agentUI?.openSubagentModels(),
 			// The panel decides which row was toggled; the file write happens here
 			// so the render path stays free of I/O.
 			toggleResource: (item) => {

@@ -79,8 +79,16 @@ export function supportedPiVariants(model: {
 	});
 }
 
+export function clampPiVariant(model: Parameters<typeof supportedPiVariants>[0], level: string): string {
+	const available = supportedPiVariants(model);
+	const levels = [...PI_THINKING_LEVELS], index = levels.indexOf(level);
+	if (index < 0) return available[0] ?? "off";
+	return levels.slice(index).find((candidate) => available.includes(candidate)) ??
+		levels.slice(0, index).reverse().find((candidate) => available.includes(candidate)) ?? "off";
+}
+
 export function selectChildModel(input: {
-	agent: { id: string; model?: string; variant?: string };
+	agent: { id: string; model?: string; thinkingLevel?: string; variant?: string };
 	parentModel?: string;
 	parentThinking?: string;
 	explicitModel?: string;
@@ -91,14 +99,18 @@ export function selectChildModel(input: {
 	const { agent, previousAgent } = input;
 	const continuing = previousAgent !== undefined;
 	const switched = continuing && previousAgent !== agent.id;
+	const inline = agent.model?.match(/^(.*)[#:]([^#:]+)$/);
+	const inlineThinking = inline && PI_THINKING_LEVELS.has(inline[2]) ? inline[2] : undefined;
+	const agentModel = inlineThinking ? inline![1] : agent.model;
+	const agentThinking = agent.thinkingLevel ?? (agentModel ? agent.variant ?? inlineThinking : undefined);
 	const model = input.explicitModel ?? (continuing
-		? (switched ? agent.model : undefined)
-		: agent.model ?? input.parentModel);
+		? (switched ? agentModel : undefined)
+		: agentModel ?? input.parentModel);
 	const thinkingLevel = input.explicitModel
 		? (input.explicitThinking ?? (continuing ? undefined : input.parentThinking))
 		: continuing
-			? (switched && agent.model ? agent.variant : undefined)
-			: (agent.model ? agent.variant ?? input.parentThinking : input.parentThinking);
+			? (switched ? agentThinking : undefined)
+			: agentThinking ?? input.parentThinking;
 	return { model, thinkingLevel };
 }
 

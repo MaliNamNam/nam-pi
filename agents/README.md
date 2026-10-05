@@ -39,6 +39,7 @@ OPENCODE_EXPERIMENTAL_SCOUT=1 pi     # or --agent-experimental
 /agent plan                                       # switch the primary agent
 /agents sessions                                  # list this conversation's child sessions
 /agents view                                      # open the Subagents/Shell composer
+/agents models                                    # edit this session's subagent models/thinking
 /agents view <sessionID>                          # view that child's live transcript page
 /agents background                                # move existing foreground work to the background
 /agents migrate                                   # hide older owned child sessions from /resume
@@ -57,6 +58,14 @@ The model dispatches subagents through the `subagent` tool, with OpenCode's para
 | `sessionID` | Continue a settled child, or admit input to its existing live run |
 | `background` | Run asynchronously and return immediately |
 | `isolation` | `shared` (default) or `worktree`; continuation keeps the original workspace |
+
+### Session-local subagent models
+
+Click the side panel's **Subagents** heading, including on a child page or before any jobs exist, or run `/agents models`. The popup lists the configured, visible subagents permitted by the current primary agent; Scout appears only when experimental discovery enables it. Select a role with the arrows or mouse, then press Enter to use Pi's native searchable model picker. **Shift+Tab** cycles that role's supported thinking levels (or your configured thinking-cycle key); **Ctrl+R** follows config defaults again. Esc backs out of search, then closes the popup.
+
+Assignments are saved with the **parent session**, survive reload/resume, and are shared across its `/tree` branches. They do not change `pi.jsonc`, Pi's global defaults, or the main session's model. New and continued dispatches resolve explicit tool `model` → session assignment → configured agent model → parent model; untouched same-agent continuations still preserve their saved model. An explicit reset also makes settled continuations follow current defaults. Configured `thinkingLevel` takes precedence over `variant`; non-reasoning models use `off`.
+
+Changing an assignment also updates that parent's matching **direct running children**, including foreground, background and transferred runs. Native configuration-only setters update the existing child for its next provider request; an already in-flight response is unchanged. No new task, steering message, process, role or permission change is introduced. Unreachable/rejected child updates are reported while retaining the preference for later dispatches. Descendants owned by another child keep that child's own assignments; opening their preview does not transfer ownership.
 
 ### Optional isolated writing tasks
 
@@ -98,9 +107,9 @@ Child pages replace the chat editor with an always-open Subagents/Shell composer
 
 When the paired `pi-side-panel` extension is loaded, the verified family list appears
 below **Context**, behind a separator, instead of in the footer. Click a row to
-inspect that child; click the section heading, press Down in an empty editor, or
-run `/agents view` to open the same Subagents/Shell controls in the rounded Pi
-composer. Foreground dispatch, completion, cancellation, restoration and nested
+inspect that child; click the section heading to edit this parent session's
+subagent model assignments. Press Down in an empty editor or run `/agents view`
+to open the Subagents/Shell job controls in the rounded Pi composer. Foreground dispatch, completion, cancellation, restoration and nested
 children all use the agents extension's live state rather than a second list built
 from tool-result messages.
 
@@ -179,7 +188,7 @@ Direct background dispatch, nested-capable agents, Bun, different-cwd sessions a
 
 ## Session continuation
 
-A follow-up to a **running, directly owned** child is admitted to that same run. `background=true` returns a notice after admission; foreground mode joins the existing child result. Ordered inputs enter at Pi's steering boundary after the current assistant/tool turn, not by interrupting completed side effects. The child retains its history and saved model unless a different agent or explicit model is selected; no duplicate runtime writes its transcript. Supported process/SDK children apply agent/model/prompt/permission changes at the next turn boundary, after the old tool batch finishes. Preparation must be explicitly acknowledged before the task is queued; only an applied child receipt changes parent metadata. A completed but undelivered background result must still be collected before a new generation starts. Missing/stale capabilities and uncertain acknowledgements fail closed without automatic replay.
+A follow-up to a **running, directly owned** child is admitted to that same run. `background=true` returns a notice after admission; foreground mode joins the existing child result. Ordered inputs enter at Pi's steering boundary after the current assistant/tool turn, not by interrupting completed side effects. The child retains its history and saved model unless a different agent, explicit model, or saved session assignment/reset is selected; no duplicate runtime writes its transcript. Supported process/SDK children apply agent/model/prompt/permission changes at the next turn boundary, after the old tool batch finishes. Preparation must be explicitly acknowledged before the task is queued; only an applied child receipt changes parent metadata. A completed but undelivered background result must still be collected before a new generation starts. Missing/stale capabilities and uncertain acknowledgements fail closed without automatic replay.
 
 Subprocess runs use a private RPC stdin/stdout channel and a file-backed observer log; SDK runs use their per-run worker capability. Neither is recovered from a saved PID. Unrelated RPC dialogs fail closed; paired permissions/questions still use the verified root form route. On Windows/Pi 1.0/Node 24, child RPC shutdown includes an idle handshake and 100 ms drain grace to avoid a reproduced native `UV_HANDLE_CLOSING` exit race; nonzero exits remain errors. The earlier scaling benchmark predates this subprocess transport change.
 
@@ -193,7 +202,7 @@ OpenCode v2 also creates a **separate child session**, but links it to its paren
 
 The first call claims an ID in the nested child directory and creates the child with `pi --session-id`. Later calls verify the persisted owner **and** exact child session file; a live run uses its retained input capability, while a settled run resumes using `pi --session <verified-file>`. Older *owned* children from previous versions can still be continued; open their parent and run `/agents migrate` to move settled children out of `/resume`. Migration skips running or incomplete jobs. Sessions created before ownership tracking have no verifiable parent and cannot be migrated automatically; inspect or remove those manually through `/resume`. A session from another parent or an absent child file is rejected rather than silently created or adopted. Background continuations also use the verified file; changing agents updates the ownership record after dispatch.
 
-For a new child, model precedence is explicit `model` argument → configured agent model → parent's currently selected Pi model. A continuation keeps its saved child model unless explicitly overridden or switched to an agent with its own model. Explicit model IDs and Pi-supported thinking variants are checked against Pi's available model catalog before dispatch.
+For a new child, model precedence is explicit `model` argument → saved session assignment → configured agent model → parent's currently selected Pi model. A continuation keeps its saved child model unless overridden by the call, the session assignment/reset, or a switch to an agent with its own model. Explicit model IDs and Pi-supported thinking variants are checked against Pi's available model catalog before dispatch.
 
 ## Configuration
 
@@ -349,7 +358,7 @@ Remaining differences and implementation limits:
 - **Scout's cache has no OpenCode equivalent.** OpenCode clones into a managed cache; the Pi port uses `<agent-dir>/cache/scout` and names that path in the prompt.
 - **Provider sampling options depend on the provider.** `temperature` and `top_p` are forwarded to the payload, but some models (notably some reasoning models) reject them.
 - **Model variants are mapped, not passed through.** An explicit `#variant` must name a thinking level supported by the Pi model; other explicit variants are rejected. Configured agent variants outside Pi's levels still have no equivalent.
-- **Live switching is boundary-scoped.** It requires a supported child and one-at-a-time steering; all-at-once mode fails before admission. SDK children cannot switch to nested-capable agents without settling and continuing through the process runner. An already-running tool keeps its old policy. Settlement races may reject input; uncertain acknowledgements are never replayed, and queued admission does not guarantee survival across cancellation/crash. See [the verified switching checkpoint](docs/live-switching.md).
+- **Live agent/task switching is boundary-scoped.** It requires a supported child and one-at-a-time steering; all-at-once mode fails before admission. SDK children cannot switch to nested-capable agents without settling and continuing through the process runner. An already-running tool keeps its old policy. Settlement races may reject input; uncertain acknowledgements are never replayed, and queued admission does not guarantee survival across cancellation/crash. See [the verified switching checkpoint](docs/live-switching.md).
 - **Background jobs are owned Pi subprocesses, not OpenCode server jobs.** All children stop when their owning Pi session shuts down; Ctrl+B only releases the foreground wait. `/agents cancel <sessionID>` uses a directly retained live handle or asks the descendant's owning runtime to interrupt that exact run, never an unverified PID from disk. A completed job is reported after its direct parent session completes a turn. Foreground dispatch is cancellable with `Ctrl+C`.
 - **`subagent_depth` defaults to 1**, matching OpenCode. Nesting requires both a higher `--agent-depth N` and an agent whose permissions allow subagent dispatch; the family viewer does not loosen either guard.
 
@@ -372,6 +381,8 @@ Unit and behavioral tests cover agent definitions, configuration, permissions, c
 Run `node test/live-scaling.mjs --output test/results/scaling-local.json` for real 1/4/8 parallel foreground dispatch, cold/warm startup, root RPC latency and sampled aggregate working-set memory. It never contacts real providers, rejects hidden SDK fallback, and is a standalone benchmark rather than part of `npm test`. See [the measured baseline and caveats](docs/scaling-benchmark.md) and the [corrected handoff checkpoint](docs/handoff-profile.md). Use `--counts 8 --backends sdk --profile-dir <directory>` for focused root-main-thread V8 sampling; `node test/summarize-profile.mjs <file.cpuprofile>` summarizes weighted samples (including possible blocked-I/O time). `test/subagent-result.test.ts`, `test/jsonl-lines.test.ts` and `test/cpu-profile.test.ts` cover lossless compact metadata, linear LF framing and sample attribution.
 
 `test/sdk-worker.test.ts` uses an isolated local provider to verify shared-thread concurrency, separate histories/models/policies, project trust, sibling-safe cancellation, initialization cancellation, same-session transfer, root-PID safety, worker failure/restart and graceful native-shell cleanup. Repeat `test/live-subagent.mjs` and `test/live-forms.mjs` with `PI_AGENT_RUNNER=sdk`; they assert actual persisted SDK runner metadata, not just a successful subprocess fallback.
+
+`test/subagent-models.test.ts` covers session-wide restoration, reset markers and thinking defaults. `test/sdk-models.test.ts` runs a private SDK worker against a local mock endpoint to verify next-request model/thinking changes with one user task. The dispatch fixture also checks foreground/background model-only changes, explicit-call precedence, reset/resume, sibling isolation, failed updates and stale session callbacks. Root `test/subagent-model-picker.test.mjs` checks heading clicks, native search/focus, thinking controls, width/scroll bounds and child-page routing; `SUBAGENT_MODELS_SNAPSHOT_DIR` saves ANSI captures.
 
 `test/child-input.test.ts` covers ordered admission, cancellation, stale handles and RPC settlement/failure races. `test/sdk-worker.test.ts` also tests same-session steering and a slow input handler racing settlement. Run `node test/live-steering.mjs` in process/SDK modes (optionally paired with safeguards) for direct-parent validation, ordered once-only input, model/policy/history retention, foreground joining and single background delivery. `test/live-rpc-shutdown.mjs` isolates the Windows native exit assertion without extensions.
 
@@ -418,6 +429,8 @@ src/interrupts.ts   per-run, owner-routed descendant interruption
 src/forms.ts        root-owned request/reply queue and session-local ask grants
 src/form-ui.ts      native Pi permission/question dialogs
 src/primary-state.ts persisted, branch-sensitive primary selection
+src/subagent-models.ts session-wide subagent model receipts and restoration
+src/subagent-model-picker.ts popup role assignments and native model search
 src/steps.ts        max-steps prompt, message, and counter
 src/enforce.ts      per-call permissions and external-path checks
 src/path-rules.ts   normalized logical/physical file-path rules

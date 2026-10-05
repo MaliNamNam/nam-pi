@@ -482,6 +482,8 @@ export interface RunHandle extends EventEmitter {
 	readonly agent?: string;
 	/** Per-run input admission; optional for old fixtures/non-controllable runs. */
 	steer?(text: string, signal?: AbortSignal, update?: LiveInputUpdate): Promise<InputDisposition>;
+	/** Change only model/thinking; never enqueue another child task. */
+	configureModel?(model: string, thinkingLevel?: string): Promise<void>;
 }
 export interface DetachedRun {
 	pid: number;

@@ -24,14 +24,20 @@ class SDKHandle extends EventEmitter implements RunHandle {
 	killed = false;
 	private readonly cancel: () => void;
 	private readonly input: ChildInput;
+	private readonly configure: (model: string, thinkingLevel?: string) => Promise<void>;
 	readonly supportsLiveUpdates = true as const;
 	private currentAgent: string;
 	get agent(): string { return this.currentAgent; }
-	constructor(cancel: () => void, accept: (text: string, update?: LiveInputUpdate, signal?: AbortSignal) => Promise<InputDisposition>, agent: string) {
-		super(); this.cancel = cancel; this.currentAgent = agent;
+	constructor(cancel: () => void, accept: (text: string, update?: LiveInputUpdate, signal?: AbortSignal) => Promise<InputDisposition>, agent: string,
+		configure: (model: string, thinkingLevel?: string) => Promise<void>) {
+		super(); this.cancel = cancel; this.currentAgent = agent; this.configure = configure;
 		this.input = new ChildInput(accept, () => !this.killed && this.exitCode === null && this.signalCode === null);
 	}
 	steer(text: string, signal?: AbortSignal, update?: LiveInputUpdate): Promise<InputDisposition> { return this.input.steer(text, signal, update); }
+	configureModel(model: string, thinkingLevel?: string): Promise<void> {
+		if (this.killed || this.exitCode !== null || this.signalCode !== null) return Promise.reject(new Error("SDK child is no longer running"));
+		return this.configure(model, thinkingLevel);
+	}
 	switchAgent(agent: string): void { this.currentAgent = agent; this.emit("agent_switch", agent); }
 	kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
 		if (this.exitCode !== null || this.signalCode !== null) return false;
@@ -68,6 +74,7 @@ export class SDKWorkerClient {
 	private readonly pending = new Map<string, Pending>();
 	private readonly sessions = new Set<string>();
 	private readonly inputs = new Map<string, { runID: string; worker: Worker; resolve(value: InputDisposition): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout>; cleanup(): void }>();
+	private readonly configurations = new Map<string, { runID: string; worker: Worker; resolve(): void; reject(error: Error): void; timer: ReturnType<typeof setTimeout> }>();
 	private diagnostics = "";
 	private readonly agentDir: string;
 	constructor(agentDir = getAgentDir()) { this.agentDir = agentDir; }
@@ -121,7 +128,8 @@ export class SDKWorkerClient {
 		worker.ref();
 		return new Promise<DetachedRun>((resolve, reject) => {
 			const cancelState = new SharedArrayBuffer(4), cancelled = new Int32Array(cancelState);
-			const handle = new SDKHandle(() => { Atomics.store(cancelled, 0, 1); worker.postMessage({ type: "abort", runID }); }, (text, update, signal) => this.admit(worker, runID, text, update, signal), options.agent.id);
+			const handle = new SDKHandle(() => { Atomics.store(cancelled, 0, 1); worker.postMessage({ type: "abort", runID }); }, (text, update, signal) => this.admit(worker, runID, text, update, signal), options.agent.id,
+				(model, thinkingLevel) => this.configure(worker, runID, model, thinkingLevel));
 			const cancel = () => {
 				handle.kill();
 				if (!this.pending.get(runID)?.started) reject(new Error("SDK initialization cancelled"));
@@ -165,13 +173,38 @@ export class SDKWorkerClient {
 			catch (error) { this.inputs.delete(inputID); clearTimeout(timer); cleanup(); reject(new Error(String(error))); }
 		});
 	}
+	private configure(worker: Worker, runID: string, model: string, thinkingLevel?: string): Promise<void> {
+		const run = this.pending.get(runID);
+		if (run?.worker !== worker || !run.started || run.handle.killed) return Promise.reject(new Error("SDK child is no longer running"));
+		const configurationID = randomUUID();
+		return new Promise((resolve, reject) => {
+			const timer = setTimeout(() => {
+				this.configurations.delete(configurationID);
+				reject(new Error("SDK model update acknowledgement timed out (no automatic replay)"));
+			}, 30_000);
+			this.configurations.set(configurationID, { runID, worker, resolve, reject, timer });
+			try { worker.postMessage({ type: "configure_model", runID, configurationID, model, thinkingLevel }); }
+			catch (error) { this.configurations.delete(configurationID); clearTimeout(timer); reject(new Error(String(error))); }
+		});
+	}
 	private rejectInputs(runID: string): void {
+		for (const [id, request] of this.configurations) if (request.runID === runID) {
+			this.configurations.delete(id); clearTimeout(request.timer);
+			request.reject(new Error("SDK child ended before acknowledging its model update"));
+		}
 		for (const [id, input] of this.inputs) if (input.runID === runID) {
 			this.inputs.delete(id); clearTimeout(input.timer); input.cleanup();
 			input.reject(new Error("SDK child ended before acknowledging input; do not replay automatically"));
 		}
 	}
-	private async receive(message: { type: string; runID: string; inputID?: string; disposition?: InputDisposition; agent?: string; code?: number; error?: string }): Promise<void> {
+	private async receive(message: { type: string; runID: string; inputID?: string; configurationID?: string; disposition?: InputDisposition; agent?: string; code?: number; error?: string }): Promise<void> {
+		if (message.type === "model_reply" && message.configurationID) {
+			const request = this.configurations.get(message.configurationID);
+			if (!request || request.runID !== message.runID) return;
+			this.configurations.delete(message.configurationID); clearTimeout(request.timer);
+			if (message.error) request.reject(new Error(message.error)); else request.resolve();
+			return;
+		}
 		if (message.type === "input_reply" && message.inputID) {
 			const input = this.inputs.get(message.inputID);
 			if (!input || input.runID !== message.runID) return;

@@ -5,6 +5,7 @@ import type { ShellStatus } from "./shells.ts";
 /** Normal OpenCode TUI: routes/session/composer/{index,subagents-tab,shell-tab}.tsx. */
 export interface ComposerChild {
 	id: string;
+	parentID?: string;
 	agent: string;
 	title: string;
 	status: "running" | "completed" | "error" | "cancelled";

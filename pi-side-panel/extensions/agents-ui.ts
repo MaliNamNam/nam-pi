@@ -25,6 +25,7 @@ export interface AgentController {
   sessionID: string;
   createComposer(tui: TUI, theme: EditorTheme, keys: KeybindingsManager): AgentComposer;
   viewChild(id: string): void;
+  openSubagentModels(): void;
 }
 export interface AgentState { sessionID: string; children: SidebarSubagent[]; }
 interface TranscriptEntry {
@@ -83,7 +84,6 @@ export class AgentWorkspaceEditor extends ComposerEditor {
     this.agents = agents;
   }
   connect(agents: AgentComposer): void { this.agents = agents; }
-  openSubagents(): void { this.agents?.open(); }
   override handleInput(data: string): void {
     if (this.agents?.isPanelOpen) return this.agents.handleInput(data);
     if (this.agents?.hasJobs && matchesKey(data, "down") && !this.getText().trim() && !this.isShowingAutocomplete()) {
@@ -157,6 +157,7 @@ export class ChildWorkspacePage implements Component {
     resources(): ResourceCatalog;
     toggleResource?(item: ResourceItem): ResourceItem | undefined;
     persistWidth(width: number | undefined): void;
+    openSubagentModels?(): void;
     onDispose?(): void;
   }) {
     // Bind only; attach() would install a second root splitter or overlay.
@@ -165,7 +166,7 @@ export class ChildWorkspacePage implements Component {
     this.sidebar.setActions({
       viewSubagent: request.viewChild,
       persistWidth: source.persistWidth,
-
+      openSubagents: source.openSubagentModels,
     });
     request.page.setComposerFrame((lines, width) => frameAgentComposer(lines, width, this.composerSource()));
   }

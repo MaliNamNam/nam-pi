@@ -39,21 +39,23 @@ async function harness(t: TestContext, flags: Record<string, unknown> = {}) {
 	delete process.env.PI_AGENT_ID; delete process.env.PI_AGENT_CONFIG_CWD;
 	const handlers = new Map<string, ((event: any, ctx: ExtensionContext) => any)[]>();
 	const tools = new Map<string, any>(), commands = new Map<string, any>();
-	const notices: { message: any; options: any }[] = [], notifications: string[] = [];
+	const notices: { message: any; options: any }[] = [], notifications: string[] = [], entries: any[] = [];
 	const pi = {
 		on: (name: string, handler: any) => handlers.set(name, [...(handlers.get(name) ?? []), handler]),
-		registerFlag() {}, getFlag: (name: string) => flags[name], appendEntry() {}, events: new EventEmitter(),
+		registerFlag() {}, getFlag: (name: string) => flags[name], appendEntry: (customType: string, data: any) => entries.push({ type: "custom", customType, data }), events: new EventEmitter(),
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerCommand: (name: string, command: any) => commands.set(name, command), registerMessageRenderer() {},
 		getActiveTools: () => ["read", "write", "bash", "subagent"], setActiveTools() {},
 		sendMessage: (message: any, options: any) => notices.push({ message, options }),
 	} as unknown as ExtensionAPI;
-	const model = { provider: "fixture", id: "small" };
+	const model = { provider: "fixture", id: "small", name: "Small", api: "openai-completions", reasoning: false, input: ["text"],
+		contextWindow: 32000, maxTokens: 256, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } };
+	const models = [model, { ...model, id: "alternate", name: "Alternate", reasoning: true }];
 	const ctx = {
-		cwd, mode: "json", hasUI: false, isIdle: () => true, model, modelRegistry: { getAvailable: () => [model] },
+		cwd, mode: "json", hasUI: false, isIdle: () => true, model, modelRegistry: { getAvailable: () => models, find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id) },
 		ui: { notify: (message: string) => notifications.push(message) },
 		sessionManager: { getSessionId: () => "parent", getSessionFile: () => path.join(root, "parent.jsonl"),
-			getSessionDir: () => sessionDir, getEntries: () => [], getBranch: () => [] },
+			getSessionDir: () => sessionDir, getEntries: () => entries, getBranch: () => [] },
 	} as unknown as ExtensionContext;
 	const owner: OwnerContext = { cwd, parentID: "parent", parentFile: path.join(root, "parent.jsonl"), sessionDir: childSessionDir(sessionDir, "parent") };
 	const emit = async (name: string, event: any = {}) => { for (const handler of handlers.get(name) ?? []) await handler(event, ctx); };
@@ -70,7 +72,20 @@ async function harness(t: TestContext, flags: Record<string, unknown> = {}) {
 		try { return await tools.get("subagent").execute(`fixture-call-${++calls}`, { agent: "general", description: "Fixture file edits", ...input }, signal, onUpdate, ctx); }
 		finally { process.argv[1] = script; }
 	};
-	return { root, cwd, sessionDir, owner, pi, ctx, emit, invoke, commands, notices, notifications, tools };
+	const openModels = () => {
+		const previousMode = ctx.mode;
+		(ctx as any).mode = "tui";
+		let picker: any, done: () => void;
+		(ctx.ui as any).custom = (factory: any) => new Promise<void>((resolve) => {
+			done = resolve;
+			picker = factory({ terminal: { rows: 30, columns: 100 }, requestRender() {} }, { fg: (_tone: string, text: string) => text }, {}, resolve);
+		});
+		const completion = commands.get("agents").handler("models", ctx);
+		assert.ok(picker, "the keyboard command must open the assignment popup");
+		return { save: (id: string, reference: string | null) => picker.options.save(id, reference),
+			entries: () => picker.options.entries(), close: async () => { picker.dispose(); done(); await completion; (ctx as any).mode = previousMode; } };
+	};
+	return { root, cwd, sessionDir, owner, pi, ctx, emit, invoke, commands, notices, notifications, tools, entries, openModels };
 }
 const prompt = (text: string, delay = 0) => JSON.stringify({ text, delay });
 async function settled(registry: JobRegistry, id: string) {
@@ -281,4 +296,165 @@ test("foreground abort and parent shutdown stop transport fixtures without delet
 	await h.emit("session_shutdown");
 	assert.equal(await fs.readFile(path.join(background.details.workspace.cwd, "fixture-edits.txt"), "utf8"), "unfinished background edit");
 	assert.equal(await fs.readFile(path.join(h.cwd, "fixture-edits.txt"), "utf8"), "committed");
+});
+
+const modelState = async (cwd: string, id: string) => JSON.parse(await fs.readFile(path.join(cwd, `fixture-model-${id}.json`), "utf8"));
+
+test("session model assignments govern new and settled dispatch, explicit calls win, and reset/resume retain defaults", { timeout: 15000 }, async (t) => {
+	const h = await harness(t);
+	let popup = h.openModels();
+	try { await popup.save("general", "fixture/alternate#high"); }
+	finally { await popup.close(); }
+	const first = await h.invoke({ prompt: prompt("assigned child") });
+	assert.equal(first.details?.status, "completed", first.content[0].text);
+	const id = first.details.sessionID;
+	assert.equal((await modelState(h.cwd, id)).model, "fixture/alternate");
+	assert.equal((await modelState(h.cwd, id)).thinkingLevel, "high");
+	const explicit = await h.invoke({ prompt: prompt("explicit child"), model: "fixture/small#off" });
+	assert.equal((await modelState(h.cwd, explicit.details.sessionID)).model, "fixture/small");
+	await h.emit("session_start");
+	const continued = await h.invoke({ sessionID: id, prompt: prompt("restored assignment") });
+	assert.equal(continued.details?.sessionID, id);
+	assert.equal((await modelState(h.cwd, id)).model, "fixture/alternate");
+	popup = h.openModels();
+	try { await popup.save("general", null); }
+	finally { await popup.close(); }
+	await h.emit("session_start");
+	const reset = await h.invoke({ sessionID: id, prompt: prompt("follow config again") });
+	assert.equal(reset.details?.sessionID, id);
+	assert.equal((await modelState(h.cwd, id)).model, "fixture/small", "settled continuations must obey an explicit reset too");
+	assert.equal(h.ctx.model?.id, "small", "assigning children never changes the main session model");
+	(h.ctx.sessionManager as any).getEntries = () => [];
+	(h.ctx.sessionManager as any).getSessionId = () => "separate-parent";
+	await h.emit("session_start");
+	const separate = await h.invoke({ prompt: prompt("new session defaults") });
+	assert.equal((await modelState(h.cwd, separate.details.sessionID)).model, "fixture/small");
+});
+
+test("one assignment updates matching background/transferred children without another task or touching other roles", { timeout: 15000 }, async (t) => {
+	const h = await harness(t);
+	const transferred = await h.invoke({ prompt: prompt("transferred", 60000) }, undefined, (result) => {
+		if (result.details?.progress?.length) void h.commands.get("agents").handler("background", h.ctx);
+	});
+	const background = await h.invoke({ prompt: prompt("background", 60000), background: true });
+	const other = await h.invoke({ agent: "explore", prompt: prompt("other role", 60000), background: true });
+	const ids = [transferred.details.sessionID, background.details.sessionID];
+	const before = await Promise.all(ids.map((id) => modelState(h.cwd, id)));
+	const popup = h.openModels();
+	try {
+		assert.deepEqual(popup.entries().map((entry: any) => entry.id), ["explore", "general"], "the popup lists available definitions rather than inventing Scout");
+		assert.match(await popup.save("general", "fixture/alternate#high"), /2 running child/);
+	} finally { await popup.close(); }
+	for (const [index, id] of ids.entries()) {
+		const after = await modelState(h.cwd, id);
+		assert.equal(after.pid, before[index].pid); assert.equal(after.id, id);
+		assert.equal(after.tasks, 1, "configuration must never enqueue a steering prompt");
+		assert.equal(after.model, "fixture/alternate"); assert.equal(after.thinkingLevel, "high");
+		assert.deepEqual(after.configurations.map((entry: any) => entry.type), ["set_model", "set_thinking_level"]);
+		const owned = await findOwnedChild(h.owner, id);
+		const transcript = (await fs.readFile(owned!.file, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+		assert.equal(transcript.filter((entry) => entry.message?.role === "user").length, 1);
+	}
+	assert.deepEqual((await modelState(h.cwd, other.details.sessionID)).configurations, []);
+	assert.equal(h.ctx.model?.id, "small");
+});
+
+test("a running foreground child switches models in place and remains cancellable", { timeout: 15000 }, async (t) => {
+	const h = await harness(t);
+	let announce: (id: string) => void;
+	const started = new Promise<string>((resolve) => { announce = resolve; });
+	const running = h.invoke({ prompt: prompt("foreground", 60000) }, undefined, (result) => {
+		if (result.details?.progress?.length) announce(result.details.sessionID);
+	});
+	const id = await started, before = await modelState(h.cwd, id), popup = h.openModels();
+	try { assert.match(await popup.save("general", "fixture/alternate#low"), /1 running child/); }
+	finally { await popup.close(); }
+	const after = await modelState(h.cwd, id);
+	assert.equal(after.pid, before.pid); assert.equal(after.tasks, 1); assert.equal(after.model, "fixture/alternate");
+	await h.commands.get("agents").handler(`cancel ${id}`, h.ctx);
+	assert.match((await running).content[0].text, /Subagent cancelled/);
+});
+
+test("rejected live configuration is reported while saving future assignments and leaving the original task running", { timeout: 15000 }, async (t) => {
+	const h = await harness(t);
+	const result = await h.invoke({ prompt: prompt("unchanged task", 60000), background: true });
+	const id = result.details.sessionID;
+	await fs.writeFile(path.join(h.cwd, `fixture-reject-model-${id}`), "fixture");
+	const popup = h.openModels();
+	try {
+		assert.match(await popup.save("general", "fixture/alternate#high"), /1 running child update\(s\) failed/);
+		assert.ok(h.notifications.some((message) => message.includes("Fixture rejected model update")));
+		assert.equal(h.entries.at(-1).data.model, "fixture/alternate#high");
+		assert.equal((await modelState(h.cwd, id)).model, "fixture/small");
+		assert.equal((await modelState(h.cwd, id)).tasks, 1);
+		await fs.rm(path.join(h.cwd, `fixture-reject-model-${id}`));
+		await fs.writeFile(path.join(h.cwd, `fixture-session-identity-${id}.txt`), "foreign-session");
+		assert.match(await popup.save("general", "fixture/alternate#low"), /1 running child update\(s\) failed/);
+		assert.ok(h.notifications.some((message) => message.includes("session identity changed")));
+		assert.deepEqual((await modelState(h.cwd, id)).configurations, [], "a changed session identity must never be mutated");
+	} finally { await popup.close(); }
+});
+
+test("saved callbacks from a former session cannot change the new session's model assignments", { timeout: 15000 }, async (t) => {
+	const h = await harness(t), popup = h.openModels();
+	try {
+		(h.ctx as any).mode = "json";
+		await h.emit("session_start");
+		const count = h.entries.length;
+		await assert.rejects(popup.save("general", "fixture/alternate#high"), /Parent session changed/);
+		assert.equal(h.entries.length, count);
+	} finally { await popup.close(); }
+});
+
+test("reset rejects an unavailable configured default instead of silently resuming the old model", { timeout: 15000 }, async (t) => {
+	const h = await harness(t, { "agent-scope": "both" });
+	let popup = h.openModels();
+	try { await popup.save("general", "fixture/alternate#high"); }
+	finally { await popup.close(); }
+	const first = await h.invoke({ prompt: prompt("old assigned model") });
+	await fs.writeFile(path.join(h.cwd, ".pi", "pi.jsonc"), JSON.stringify({ agent: { general: { model: "fixture/missing" } } }));
+	await h.emit("session_start");
+	popup = h.openModels();
+	try { await popup.save("general", null); }
+	finally { await popup.close(); }
+	const result = await h.invoke({ sessionID: first.details.sessionID, prompt: prompt("must not run on the old model") });
+	assert.match(result.content[0].text, /Model "fixture\/missing" is not available/);
+});
+
+test("configured inline thinking is shown accurately and used as the Pi child model argument", { timeout: 15000 }, async (t) => {
+	const h = await harness(t, { "agent-scope": "both" });
+	await fs.mkdir(path.join(h.cwd, ".pi"), { recursive: true });
+	await fs.writeFile(path.join(h.cwd, ".pi", "pi.jsonc"), JSON.stringify({ agent: { general: { model: "fixture/alternate#high" } } }));
+	await h.emit("session_start");
+	const popup = h.openModels();
+	try {
+		const entry = popup.entries().find((entry: any) => entry.id === "general");
+		assert.equal(entry.reference, "fixture/alternate"); assert.equal(entry.thinkingLevel, "high");
+	} finally { await popup.close(); }
+	const result = await h.invoke({ prompt: prompt("configured inline thinking") });
+	const state = await modelState(h.cwd, result.details.sessionID);
+	assert.equal(state.model, "fixture/alternate"); assert.equal(state.thinkingLevel, "high");
+});
+
+test("restored preferences clamp changed catalog thinking support just like the displayed assignment", { timeout: 15000 }, async (t) => {
+	const h = await harness(t);
+	const popup = h.openModels();
+	try {
+		await popup.save("general", "fixture/alternate#high");
+		(h.ctx.modelRegistry.getAvailable()[1] as any).thinkingLevelMap = { high: null };
+		assert.equal(popup.entries().find((entry: any) => entry.id === "general").thinkingLevel, "medium");
+	} finally { await popup.close(); }
+	const result = await h.invoke({ prompt: prompt("current supported thinking") });
+	assert.equal(result.details?.status, "completed", result.content[0].text);
+	assert.equal((await modelState(h.cwd, result.details.sessionID)).thinkingLevel, "medium");
+});
+
+test("Scout assignments are available when experimental discovery enables that role", { timeout: 15000 }, async (t) => {
+	const h = await harness(t, { "agent-experimental": true }), popup = h.openModels();
+	try {
+		assert.deepEqual(popup.entries().map((entry: any) => entry.id), ["explore", "general", "scout"]);
+		await popup.save("scout", "fixture/alternate#high");
+		assert.equal(h.entries.at(-1).data.agent, "scout");
+		assert.equal(h.ctx.model?.id, "small");
+	} finally { await popup.close(); }
 });

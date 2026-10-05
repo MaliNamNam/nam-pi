@@ -13,6 +13,7 @@ export interface AgentsUIController {
 	sessionID: string;
 	createComposer(tui: TUI, theme: EditorTheme, keys: KeybindingsManager): OpenCodeComposerEditor;
 	viewChild(id: string): void;
+	openSubagentModels(): void;
 }
 export interface AgentsUIState {
 	sessionID: string;

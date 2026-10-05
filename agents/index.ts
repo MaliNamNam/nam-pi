@@ -43,7 +43,9 @@ import { ExecutionInteractions } from "./src/interactions.ts";
 import { ApprovalCoordinator, APPROVAL_BRIDGE, PERMISSION_POLICIES, type BridgeQuery, type PermissionPolicy, type PolicyQuery } from "./src/approvals.ts";
 import { showRootForm } from "./src/form-ui.ts";
 import { PRIMARY_SELECTION_TYPE, restorePrimaryAgent } from "./src/primary-state.ts";
-import { subagentListing } from "./src/listing.ts";
+import { availableSubagents, subagentListing } from "./src/listing.ts";
+import { SUBAGENT_MODELS_TYPE, restoreSubagentModels } from "./src/subagent-models.ts";
+import { SubagentModelPicker, type SubagentModelEntry } from "./src/subagent-model-picker.ts";
 import {
 	applyProviderOptions,
 	decodeProviderOptions,
@@ -52,6 +54,7 @@ import {
 } from "./src/provider-options.ts";
 import {
 	invalidModelMessage,
+	clampPiVariant,
 	parseModelRef,
 	selectChildModel,
 	supportedPiVariants,
@@ -187,6 +190,10 @@ export default function agents(pi: ExtensionAPI): void {
 	let tuiContext: ExtensionContext | undefined;
 	let childPageOpen = false;
 	let closeChildPage: (() => void) | undefined;
+	let subagentModels = new Map<string, string | null>();
+	let modelPickerOpen = false;
+	let closeModelPicker: (() => void) | undefined;
+	let modelUpdateWork: Promise<unknown> = Promise.resolve();
 	let formHost: FormHost | undefined;
 	let formReady: Promise<FormHost | undefined> | undefined;
 	let sessionAborter = new AbortController();
@@ -248,7 +255,7 @@ export default function agents(pi: ExtensionAPI): void {
 				if ((pi.getSettings?.().steeringMode ?? "one-at-a-time") !== "one-at-a-time") throw new Error("Live switching requires one-at-a-time steering");
 				const switched = currentAgent()?.id !== update.agent.id;
 				const requested = update.model ?? (switched ? update.agent.model : undefined);
-				const selected = requested ? resolveLiveModel(requested, update.thinkingLevel ?? (switched && !update.model ? update.agent.variant : undefined), ctx) : undefined;
+				const selected = requested ? resolveLiveModel(requested, update.thinkingLevel ?? (switched && !update.model ? update.agent.thinkingLevel ?? update.agent.variant : undefined), ctx) : undefined;
 				if (selected && !await pi.setModel(selected.model)) throw new Error("The child model no longer has configured authentication");
 				if (!runtimeActive || ctx.signal?.aborted) throw new Error("Child stopped during live configuration boundary");
 				if (selected?.thinkingLevel) pi.setThinkingLevel(selected.thinkingLevel);
@@ -536,7 +543,7 @@ export default function agents(pi: ExtensionAPI): void {
 					if (!agents.some((agent) => agent.id === input.update.agent.id && agent.mode !== "primary")) throw new Error("Live target agent is unavailable in this child");
 					if (pi.getFlag("agent-live-backend") === "sdk" && !leafPolicy(input.update.agent.permissions)) throw new Error("An SDK live switch cannot enable nested delegation; settle and continue using the process runner");
 					const requested = input.update.model ?? input.update.agent.model;
-					if (requested) resolveLiveModel(requested, input.update.thinkingLevel ?? (!input.update.model ? input.update.agent.variant : undefined), ctx);
+					if (requested) resolveLiveModel(requested, input.update.thinkingLevel ?? (!input.update.model ? input.update.agent.thinkingLevel ?? input.update.agent.variant : undefined), ctx);
 					liveInputs.prepare(input);
 					pi.appendEntry(LIVE_PREPARED, { sessionID: ctx.sessionManager.getSessionId(), id, ok: true });
 				} catch (error) {
@@ -555,6 +562,9 @@ export default function agents(pi: ExtensionAPI): void {
 
 	pi.on("session_start", (_event, ctx) => {
 		liveInputs.clear(); liveAgent = undefined;
+		closeModelPicker?.(); closeModelPicker = undefined; modelPickerOpen = false;
+		modelUpdateWork = Promise.resolve();
+		subagentModels = restoreSubagentModels(ctx.sessionManager.getEntries?.() ?? []);
 		closeChildPage?.();
 		closeChildPage = undefined;
 		childPageOpen = false;
@@ -655,6 +665,9 @@ export default function agents(pi: ExtensionAPI): void {
 				viewChild: (id) => { void showChildSession(ctx, id).catch((error) => {
 					if (generation === sessionGeneration && runtimeActive) ctx.ui.notify(`Unable to open subagent: ${error instanceof Error ? error.message : String(error)}`, "warning");
 				}); },
+				openSubagentModels: () => { if (generation === sessionGeneration) void showSubagentModels(ctx).catch((error) => {
+					if (generation === sessionGeneration && runtimeActive) ctx.ui.notify(`Unable to open subagent models: ${error instanceof Error ? error.message : String(error)}`, "warning");
+				}); },
 			};
 			pi.events?.emit(AGENTS_UI_CONNECT, uiController);
 			removeComposerInputListener = ctx.ui.onTerminalInput((data) => {
@@ -683,6 +696,7 @@ export default function agents(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (_event, ctx) => {
 		runtimeActive = false; liveInputs.clear();
+		closeModelPicker?.(); closeModelPicker = undefined; modelPickerOpen = false;
 		forgetDetachedResult();
 		closeForms();
 		approvals.clear();
@@ -1078,9 +1092,10 @@ export default function agents(pi: ExtensionAPI): void {
 			// Validate explicit selections before either live or settled admission.
 			let explicitModel: string | undefined;
 			let explicitThinking: string | undefined;
-			if (input.model) {
+			const assignedModel = input.model ?? assignedSubagentModel(agent, ctx);
+			if (assignedModel) {
 				let ref;
-				try { ref = parseModelRef(input.model); } catch { return failure(invalidModelMessage(input.model)); }
+				try { ref = parseModelRef(assignedModel); } catch { return failure(invalidModelMessage(assignedModel)); }
 				const available = ctx.modelRegistry.getAvailable().find((item) => item.provider === ref.providerID && item.id === ref.id);
 				if (!available) return failure(unavailableModelMessage(ref));
 				if (ref.variant && !supportedPiVariants(available).includes(ref.variant)) return failure(unavailableVariantMessage(ref, supportedPiVariants(available)));
@@ -1094,7 +1109,7 @@ export default function agents(pi: ExtensionAPI): void {
 			if (continuation && (foregroundRuns.has(sessionID) || registry.getLive(sessionID))) {
 			if (!runtimeActive || generation !== sessionGeneration || signal?.aborted) return failure("Session changed or child input cancelled");
 			const foreground = foregroundRuns.get(sessionID), child = foreground?.run.child ?? registry.getLive(sessionID)!;
-			if (!child.supportsLiveUpdates && (owned?.agent !== agent.id || input.model)) return failure(`This live child runtime does not support agent/model switching (sessionID: ${sessionID})`);
+			if (!child.supportsLiveUpdates && (owned?.agent !== agent.id || assignedModel)) return failure(`This live child runtime does not support agent/model switching (sessionID: ${sessionID})`);
 			if (!child.steer) return failure(`Live child input is unavailable (sessionID: ${sessionID})`);
 			observeLiveAgent(child, childOwner, sessionID);
 			const description = input.description ?? `${agent.id} task`;
@@ -1400,7 +1415,7 @@ export default function agents(pi: ExtensionAPI): void {
 			const isRunning = activeChildren.has(child.id) || job?.parentSessionID === child.owner.parentID || nestedForeground;
 			if (isRunning) active.add(child.id);
 			entries.push({
-				id: child.id, agent: agents.find((agent) => agent.id === child.agent)?.name ?? child.agent,
+				id: child.id, parentID: child.owner.parentID, agent: agents.find((agent) => agent.id === child.agent)?.name ?? child.agent,
 				title: child.description ?? child.id, prefix: child.prefix, current: child.id === currentID,
 				background: !foregroundBackgrounders.has(child.id),
 				status: isRunning ? "running" : child.status && child.status !== "running" ? child.status :
@@ -1408,6 +1423,85 @@ export default function agents(pi: ExtensionAPI): void {
 			});
 		}
 		return { children, entries };
+	}
+
+	function agentModelEntry(agent: AgentDefinition, ctx: ExtensionContext): SubagentModelEntry {
+		const override = subagentModels.get(agent.id);
+		const selection = override ? toPiModelArgument(parseModelRef(override)) : selectChildModel({ agent,
+			parentModel: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined, parentThinking: ctx.thinkingLevel });
+		let model: SubagentModelEntry["model"];
+		if (selection.model) {
+			try {
+				const ref = parseModelRef(selection.model);
+				model = ctx.modelRegistry.find(ref.providerID, ref.id);
+			} catch { /* an unavailable configured default can still be replaced in the picker */ }
+		}
+		const thinking = selection.thinkingLevel ?? ctx.thinkingLevel ?? "off";
+		return { id: agent.id, name: agent.name, reference: selection.model ?? "Inherit parent model", model,
+			thinkingLevel: model ? clampPiVariant(model, thinking) : thinking, overridden: typeof override === "string" };
+	}
+
+	function assignedSubagentModel(agent: AgentDefinition, ctx: ExtensionContext): string | undefined {
+		const override = subagentModels.get(agent.id);
+		if (override === undefined) return undefined;
+		// Saved preferences use the same catalog clamping shown in the picker;
+		// an explicit reset follows current defaults, even on settled continuation.
+		const entry = agentModelEntry(agent, ctx);
+		return entry.model ? `${entry.model.provider}/${entry.model.id}#${entry.thinkingLevel}` : override ?? agent.model;
+	}
+
+	function updateSubagentModel(ctx: ExtensionContext, generation: number, id: string, reference: string | null): Promise<string | undefined> {
+		const current = () => runtimeActive && generation === sessionGeneration && parentSessionID === ctx.sessionManager.getSessionId();
+		const work = modelUpdateWork.catch(() => {}).then(async () => {
+			if (!current()) throw new Error("Parent session changed");
+			const agent = availableSubagents(agents, currentAgent()).find((agent) => agent.id === id);
+			if (!agent) throw new Error(`Subagent ${id} is no longer available`);
+			if (reference !== null) {
+				const ref = parseModelRef(reference);
+				const model = ctx.modelRegistry.getAvailable().find((model) => model.provider === ref.providerID && model.id === ref.id);
+				if (!model) throw new Error(unavailableModelMessage(ref));
+				if (ref.variant && !supportedPiVariants(model).includes(ref.variant)) throw new Error(unavailableVariantMessage(ref, supportedPiVariants(model)));
+			}
+			pi.appendEntry(SUBAGENT_MODELS_TYPE, { agent: id, model: reference });
+			subagentModels.set(id, reference);
+			const selection = agentModelEntry(agent, ctx);
+			const children = await ownedFamily(ctx);
+			if (!current()) throw new Error("Parent session changed");
+			const live = children.filter((child) => child.owner.parentID === parentSessionID).flatMap((child) => {
+				const handle = foregroundRuns.get(child.id)?.run.child ?? jobs.getLive(child.id);
+				return handle && !handle.killed && handle.exitCode === null && handle.signalCode === null && (handle.agent ?? child.agent) === id ? [{ id: child.id, handle }] : [];
+			});
+			const results = await Promise.allSettled(live.map(async ({ handle }) => {
+				if (!current()) throw new Error("Parent session changed");
+				if (!selection.model) throw new Error(`Configured model ${selection.reference} is unavailable`);
+				if (!handle.configureModel) throw new Error("This child runtime cannot update its model without another task");
+				await handle.configureModel(`${selection.model.provider}/${selection.model.id}`, selection.thinkingLevel);
+			}));
+			const failures = results.flatMap((result, index) => result.status === "rejected" ? [`${live[index].id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`] : []);
+			if (failures.length && current()) ctx.ui.notify(`Assignment saved, but some running children could not update:\n${failures.join("\n")}`, "warning");
+			return failures.length ? `Saved; ${failures.length} running child update(s) failed.` : live.length
+				? `Saved; ${live.length} running child(ren) updated for their next request.` : "Saved for this session's starts and continuations.";
+		});
+		modelUpdateWork = work;
+		return work;
+	}
+
+	async function showSubagentModels(ctx: ExtensionContext): Promise<void> {
+		if (ctx.mode !== "tui") { ctx.ui.notify("Subagent model settings require interactive mode", "warning"); return; }
+		if (modelPickerOpen) return;
+		if (formHost?.isShowing) { ctx.ui.notify("Answer or dismiss the root form first", "warning"); return; }
+		const generation = sessionGeneration;
+		modelPickerOpen = true;
+		try {
+			await ctx.ui.custom<void>((tui, theme, keys, done) => {
+				closeModelPicker = done;
+				return new SubagentModelPicker(tui, theme, { keys, registry: ctx.modelRegistry, scopedModels: ctx.scopedModels,
+					entries: () => availableSubagents(agents, currentAgent()).map((agent) => agentModelEntry(agent, ctx)),
+					save: (id, model) => updateSubagentModel(ctx, generation, id, model), close: done });
+			}, { overlay: true, overlayOptions: { width: "80%", minWidth: 40, maxHeight: "90%", anchor: "center" } });
+		} finally {
+			if (generation === sessionGeneration) { modelPickerOpen = false; closeModelPicker = undefined; }
+		}
 	}
 
 	async function showChildSession(ctx: ExtensionContext, id: string): Promise<void> {
@@ -1505,6 +1599,7 @@ export default function agents(pi: ExtensionAPI): void {
 		handler: async (args, ctx) => {
 			if (agents.length === 0) reloadAgents(ctx);
 			const [subcommand, requestedID] = args.trim().split(/\s+/).filter(Boolean);
+			if (subcommand === "models") { await showSubagentModels(ctx); return; }
 			if (subcommand === "background") {
 				const count = backgroundForegroundWork();
 				ctx.ui.notify(count ? `Moving ${count} running subagent(s) to the background` : "No foreground subagents are running", "info");
@@ -1608,7 +1703,7 @@ export default function agents(pi: ExtensionAPI): void {
 				for (const child of children.slice(-8)) lines.push(`  ${child.prefix}${child.id} - ${child.agent}${child.file ? "" : " (starting)"}${child.owner.sessionDir === ctx.sessionManager.getSessionDir() ? " (legacy)" : ""}`);
 			}
 			lines.push("");
-			lines.push("Commands: /agent <id> | /agents sessions | /agents view <id> | /agents migrate | /agents running | /agents cancel <id>");
+			lines.push("Commands: /agent <id> | /agents models | /agents sessions | /agents view <id> | /agents migrate | /agents running | /agents cancel <id>");
 			ctx.ui.notify(lines.join("\n"), "info");
 		},
 	});

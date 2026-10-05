@@ -44,7 +44,7 @@ A collapsible dashboard that docks to the right edge of Pi's terminal UI.
 | **Summary** | Files changed this turn, and a read-only summary of the previous turn's tool activity. |
 | **Resources** | Extension, skill, MCP, and tool counts; click a count to toggle them on or off. |
 | **Context** | Context tokens, percent of the window used, cache hit rate, session cost, and output tokens per second. |
-| **Subagents** | Always shown. Live, verified descendant sessions; click a row to view its transcript. |
+| **Subagents** | Always shown. Click the heading for session-local model assignments; click a verified descendant row to view its transcript. |
 
 `/side-panel` hides the whole panel; no section opts out of the toggle. Each
 section is separated by a rule. Context takes its rows first when the panel is
@@ -272,12 +272,18 @@ There is no second list inferred from tool-result messages that can go stale.
 
 - Click a child row to open its live transcript. Status icons distinguish running,
   completed, failed and cancelled work; wheel-scroll lists longer than five rows.
-- Click the Subagents heading, press Down in an empty editor, or use `/agents view`
-  to open the Subagents/Shell composer **inside the current rounded editor frame**.
-  Left/Right, Up/Down, Enter, Ctrl+A (active/inactive), Ctrl+D (interrupt), and
-  Ctrl+B (background foreground work) retain OpenCode v2's behavior. The heading
-  only responds when something is listed: with no jobs the view would open empty,
-  which is the same reason the empty-editor Down key is gated on `hasJobs`.
+- Click the **Subagents heading** or run `/agents models` to open a popup of the
+  parent session's available subagent models and thinking levels—even with no
+  jobs. Select a role, press Enter for Pi's native model search, use Shift+Tab to
+  cycle thinking, and Ctrl+R to follow `pi.jsonc` defaults again. Assignments survive
+  reload/resume and apply across this session's `/tree` branches, without changing
+  global config or the main model. Matching direct running children switch for
+  their next request without another task or restart. Child-page headings open
+  the same parent-scoped settings; Scout appears only when enabled.
+- Press Down in an empty editor or use `/agents view` to open the Subagents/Shell
+  job composer **inside the current rounded editor frame**. Left/Right, Up/Down,
+  Enter, Ctrl+A (active/inactive), Ctrl+D (interrupt), and Ctrl+B (background
+  foreground work) retain OpenCode v2's behavior.
 - Child pages use the same sidebar, rounded composer, theme and registered tool
   renderers as the root—including the custom macOS-style shell frames. The sidebar
   shows the child's own model/context/spend and successful write/edit paths, not

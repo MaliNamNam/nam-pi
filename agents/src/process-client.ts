@@ -6,6 +6,7 @@ import { StringDecoder } from "node:string_decoder";
 import { ChildInput, type InputDisposition } from "./child-input.ts";
 import { liveInputCommand, LIVE_PREPARE, LIVE_CANCEL, LIVE_APPLIED, LIVE_PREPARED, LIVE_FAILED, type LiveInputUpdate } from "./live-input.ts";
 import { declinedEvent } from "./interactions.ts";
+import { parseModelRef } from "./models.ts";
 import type { PiEvent, RunHandle } from "./runner.ts";
 
 interface Reply { type?: string; id?: string; success?: boolean; error?: string; data?: { disposition?: string; sessionId?: string; steeringMode?: string; commands?: { name?: string }[] }; }
@@ -23,6 +24,7 @@ export class ProcessHandle extends EventEmitter implements RunHandle {
 	private currentAgent?: string;
 	get agent(): string | undefined { return this.currentAgent; }
 	private sessionID?: string;
+	private modelUpdates: Promise<void> = Promise.resolve();
 	private readonly preparations = new Map<string, { received?: boolean; ok?: boolean; error?: string }>();
 	private streaming = false;
 	private closing = false;
@@ -157,14 +159,15 @@ export class ProcessHandle extends EventEmitter implements RunHandle {
 		else this.log.end(finish);
 	}
 	private send(command: object): void { if (!this.child.stdin?.destroyed) this.child.stdin?.write(JSON.stringify(command) + "\n"); }
-	private command(command: object): Promise<Reply> {
+	private command(command: object, stopOnTimeout = true): Promise<Reply> {
 		if (this.closing || this.killed) return Promise.reject(new Error("Child is stopping"));
 		const id = randomUUID();
 		return new Promise((resolve, reject) => {
 			const timer = setTimeout(() => {
-				this.pending.delete(id); this.input.close();
-				reject(new Error("Child input acknowledgement timed out; admission is uncertain (no automatic replay)"));
-				this.kill();
+				this.pending.delete(id);
+				reject(new Error(stopOnTimeout ? "Child input acknowledgement timed out; admission is uncertain (no automatic replay)" : "Child model update acknowledgement timed out (no automatic replay)"));
+				if (stopOnTimeout) { this.input.close(); this.kill(); }
+				else this.closeIfSettled();
 			}, 30_000);
 			this.pending.set(id, { resolve, reject, timer }); this.send({ ...command, id });
 		});
@@ -179,6 +182,17 @@ export class ProcessHandle extends EventEmitter implements RunHandle {
 		if (reply.data?.disposition === "handled") { this.settled = true; this.closeIfSettled(); }
 	}
 	steer(text: string, signal?: AbortSignal, update?: LiveInputUpdate): Promise<InputDisposition> { return this.input.steer(text, signal, update); }
+	configureModel(model: string, thinkingLevel?: string): Promise<void> {
+		const ref = parseModelRef(model);
+		this.modelUpdates = this.modelUpdates.catch(() => {}).then(async () => {
+			if (!this.streaming || this.closing || this.killed) throw new Error("Child is no longer running");
+			const state = await this.command({ type: "get_state" }, false);
+			if (state.data?.sessionId !== this.sessionID) throw new Error("Child RPC session identity changed");
+			await this.command({ type: "set_model", provider: ref.providerID, modelId: ref.id }, false);
+			if (thinkingLevel !== undefined) await this.command({ type: "set_thinking_level", level: thinkingLevel }, false);
+		});
+		return this.modelUpdates;
+	}
 	kill(signal: NodeJS.Signals = "SIGTERM"): boolean {
 		if (this.exitCode !== null || this.signalCode !== null) return false;
 		this.killed = true; this.input.close();

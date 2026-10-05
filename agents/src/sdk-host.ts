@@ -6,10 +6,11 @@ import { bootstrapToolAllowlist } from "./permissions.ts";
 import { declinedEvent } from "./interactions.ts";
 import { liveInputCommand, LIVE_PREPARE, LIVE_CANCEL, LIVE_APPLIED, LIVE_PREPARED, LIVE_FAILED, type LiveInputUpdate } from "./live-input.ts";
 import { encodeProviderOptions, providerOptions } from "./provider-options.ts";
+import { parseModelRef } from "./models.ts";
 import { childSystemPrompt, type PiEvent, type RunOptions } from "./runner.ts";
 
 type HostedOptions = Omit<RunOptions, "signal" | "onEvent" | "backgroundSignal" | "onBackendFallback" | "onStarted"> & { agentDir: string; outputPath: string };
-interface HostedRun { cancelled: boolean; session?: AgentSession; accepting?: boolean; inputs?: Promise<unknown>; receipt?: { id: string; received?: boolean; ok?: boolean; error?: string }; }
+interface HostedRun { cancelled: boolean; sessionID?: string; session?: AgentSession; accepting?: boolean; inputs?: Promise<unknown>; receipt?: { id: string; received?: boolean; ok?: boolean; error?: string }; }
 type SDKThinking = NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"];
 
 /** The only shared state is the loaded code/worker, never a conversation or policy. */
@@ -18,7 +19,7 @@ export async function serveSDKWorker(port: MessagePort): Promise<void> {
 	const runs = new Map<string, HostedRun>();
 	let shuttingDown = false;
 	const closeWhenIdle = () => { if (shuttingDown && !runs.size) port.close(); };
-	port.on("message", (message: { type: string; runID: string; inputID?: string; text?: string; update?: LiveInputUpdate; inputCancelState?: SharedArrayBuffer; options?: HostedOptions; cancelState?: SharedArrayBuffer }) => {
+	port.on("message", (message: { type: string; runID: string; inputID?: string; configurationID?: string; model?: string; thinkingLevel?: string; text?: string; update?: LiveInputUpdate; inputCancelState?: SharedArrayBuffer; options?: HostedOptions; cancelState?: SharedArrayBuffer }) => {
 		if (message.type === "shutdown") {
 			shuttingDown = true;
 			for (const run of runs.values()) { run.cancelled = true; run.session?.clearQueue(); void run.session?.abort().catch(() => {}); }
@@ -59,10 +60,27 @@ export async function serveSDKWorker(port: MessagePort): Promise<void> {
 					port.postMessage({ type: "input_reply", runID, inputID, disposition });
 				} catch (error) { port.postMessage({ type: "input_reply", runID, inputID, error: String(error) }); }
 			});
+		} else if (message.type === "configure_model" && message.configurationID) {
+			const run = runs.get(message.runID), { runID, configurationID } = message;
+			if (!run?.accepting || !run.session || run.cancelled || typeof message.model !== "string") {
+				port.postMessage({ type: "model_reply", runID, configurationID, error: "SDK child is no longer running" }); return;
+			}
+			run.inputs = (run.inputs ?? Promise.resolve()).catch(() => {}).then(async () => {
+				try {
+					if (!run.accepting || run.cancelled || !run.session!.isStreaming) throw new Error("SDK child settled before its model update");
+					if (run.session!.sessionManager.getSessionId() !== run.sessionID) throw new Error("SDK child session identity changed");
+					const ref = parseModelRef(message.model!);
+					const model = run.session!.modelRuntime.getModel(ref.providerID, ref.id);
+					if (!model) throw new Error(`SDK model unavailable: ${message.model}`);
+					await run.session!.setModel(model, { persist: false });
+					if (message.thinkingLevel !== undefined) run.session!.setThinkingLevel(message.thinkingLevel as NonNullable<SDKThinking>, { persist: false });
+					port.postMessage({ type: "model_reply", runID, configurationID });
+				} catch (error) { port.postMessage({ type: "model_reply", runID, configurationID, error: String(error) }); }
+			});
 		} else if (message.type === "start" && !runs.has(message.runID) && message.options && message.cancelState) {
 			if (shuttingDown) { port.postMessage({ type: "not_started", runID: message.runID, error: "SDK worker is shutting down" }); return; }
 			const cancelled = new Int32Array(message.cancelState);
-			const run: HostedRun = { get cancelled() { return Atomics.load(cancelled, 0) === 1; }, set cancelled(value) { if (value) Atomics.store(cancelled, 0, 1); } };
+			const run: HostedRun = { sessionID: message.options.sessionID, get cancelled() { return Atomics.load(cancelled, 0) === 1; }, set cancelled(value) { if (value) Atomics.store(cancelled, 0, 1); } };
 			runs.set(message.runID, run);
 			void execute(message.runID, message.options, run).finally(() => { runs.delete(message.runID); closeWhenIdle(); });
 		}
