@@ -12,6 +12,7 @@ Loaded from `~/.pi/agent/extensions`.
 | `safeguards/` | package | Safety extension — destructive-command confirm gates and allowlists |
 | `pi-side-panel/` | package | Side panel — themes, extensions and tooling for a dockable panel |
 | `mac-terminal-frame.ts` | single-file | Frames built-in and extension tool calls in a macOS Terminal.app–style window |
+| `neutral-preamble.ts` | single-file | Removes Pi's default identity sentence from outgoing system prompts, preserving all other instructions |
 | `pi-models.ts` | single-file | Model/provider config from `pi.jsonc` (local `pi-models.ts` extension) |
 | `pi-splash.ts` | single-file | Splash screen while pi starts up |
 | `quiet-chrome.ts` | single-file | Trims pi's default TUI chrome for a quieter UI |
@@ -45,6 +46,7 @@ Everything the current setup loads, and where it lives in this repo:
 | `safeguards/` | `safeguards/` | Own — ports [OpenCode's permission system](https://opencode.ai/docs/permissions) (MIT, see `safeguards/LICENSE.opencode`) |
 | `pi-side-panel/` | `pi-side-panel/` | Own — your dashboard, built on pi-slate modules vendored into `extensions/slate/` ([pi-slate](https://github.com/GaganSD/pi-extensions/tree/main/pi-slate), MIT, see `pi-side-panel/LICENSE-pi-slate`) |
 | `mac-terminal-frame.ts` | `mac-terminal-frame.ts` | Own |
+| `neutral-preamble.ts` | `neutral-preamble.ts` | Own |
 | `pi-models.ts` | `pi-models.ts` | Own — loads models from `pi.jsonc` |
 | `pi-splash.ts` | `pi-splash.ts` | Own — 3D renderer adapted from [mavam/pi-splash](https://github.com/mavam/pi-splash) (MIT) |
 | `quiet-chrome.ts` | `quiet-chrome.ts` | Own |
@@ -58,6 +60,7 @@ Everything the current setup loads, and where it lives in this repo:
 - Frame regression tests: `node --test test/mac-terminal-frame.test.mjs` (set `PI_TEST_PACKAGE_DIR` to Pi's package directory when Pi is installed globally).
 - Conversation frames: right-aligned user prompts (`👤`), left-aligned replies (`🤖`) and thoughts (`🧠`), with subtle opposite-side gutters matching the side panel's rounded border. Tests: `node --test test/conversation-frames.test.mjs` (same `PI_TEST_PACKAGE_DIR` override; `CONVERSATION_FRAME_EXTENSION_DIR` can point to an installed copy's `extensions/` directory).
 - Prompt-budget tests: `node --test test/prompt-budget.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Checks compact agent-tool guidance while preserving tool availability and parameter contracts.
+- Neutral-preamble tests: `node --test test/neutral-preamble.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Removes only the default identity, including on resumed requests; custom prompts, quoted source, and tool transitions remain intact.
 - `node_modules/` is gitignored; run `npm install` inside `agents/`, `safeguards/` and `pi-side-panel/` as needed.
 - Third-party npm packages are pinned in `~/.pi/agent/settings.json` and live in `~/.pi/agent/npm/` — nothing from them is committed here.
 - Attribution for adapted third-party code is in each extension's license file or header comment.
