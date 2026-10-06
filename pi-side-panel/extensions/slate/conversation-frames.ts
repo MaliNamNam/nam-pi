@@ -22,6 +22,7 @@ function frameLayout(width: number, right: boolean) {
 class ConversationFrame implements Component {
   readonly [FRAME_CHILD]: Component;
   private contentHeight = 0;
+  private cache?: { width: number; rows: string[]; theme: Theme; lines: string[] };
 
   constructor(
     readonly child: Component,
@@ -43,8 +44,13 @@ class ConversationFrame implements Component {
     this.contentHeight = rows.length;
     if (!layout.framed) return rows.map((row) => truncateToWidth(row, width, "", true));
     if (!rows.length) return [];
+    const theme = this.owner.theme();
+    // Pi renders the transcript every frame; children return the same cached
+    // rows until their content changes, so reuse the framed copy until then.
+    const cached = this.cache;
+    if (cached && cached.width === width && cached.rows === rows && cached.theme === theme) return cached.lines;
 
-    const paint = chromePaint(this.owner.theme());
+    const paint = chromePaint(theme);
     const top = this.rightAligned
       ? inscribedBorder("", ` ${this.title} ${paint("─")}`, layout.width, paint, "╭", "╮")
       : inscribedTitle(this.title, layout.width, paint, "top");
@@ -55,10 +61,15 @@ class ConversationFrame implements Component {
     ];
     const left = " ".repeat(layout.left);
     const right = " ".repeat(layout.right);
-    return lines.map((line) => `${RESET}${left}${line}${RESET}${right}`);
+    const framed = lines.map((line) => `${RESET}${left}${line}${RESET}${right}`);
+    this.cache = { width, rows, theme, lines: framed };
+    return framed;
   }
 
-  invalidate(): void { this.child.invalidate(); }
+  invalidate(): void {
+    this.cache = undefined;
+    this.child.invalidate();
+  }
   handleInput(data: string): void { this.child.handleInput?.(data); }
 
   handleMouse(event: Parameters<NonNullable<Component["handleMouse"]>>[0]): ReturnType<NonNullable<Component["handleMouse"]>> {

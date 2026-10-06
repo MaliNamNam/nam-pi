@@ -263,6 +263,19 @@ test("errors and length stops stay visible; tool-containing assistant messages k
 	assert.doesNotMatch(assistant.render(64).join("\n"), /\x1b\]133;/);
 });
 
+test("unchanged frames are reused across renders until their width or theme changes", (t) => {
+	install(t);
+	const assistant = new AssistantMessageComponent(message([{ type: "text", text: "A stable reply" }]));
+	assistant.render(64);
+	const frame = assistant.children[0].children.find((child) => child[Symbol.for("pi-side-panel.conversation-frame-child")]);
+	const first = frame.render(64);
+	assert.equal(frame.render(64), first, "Pi renders every frame, so an unchanged message must not be re-framed");
+	assert.notEqual(frame.render(40), first);
+	const resized = frame.render(64);
+	frame.invalidate();
+	assert.notEqual(frame.render(64), resized, "invalidate drops the framed rows");
+});
+
 test("theme changes repaint the borders instead of retaining stale ANSI", (t) => {
 	install(t);
 	const user = new UserMessageComponent("Theme test");
