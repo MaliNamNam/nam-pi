@@ -109,6 +109,8 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
 		permissions: [
 			{ action: "question", resource: "*", effect: "deny" },
 			{ action: "subagent", resource: "*", effect: "deny" },
+			// Pi addition: pi-vcc's context recall (unknown child tools need a named allow).
+			{ action: "vcc_recall", resource: "*", effect: "allow" },
 		],
 	},
 	{
@@ -139,6 +141,10 @@ export const BUILTIN_AGENTS: AgentDefinition[] = [
 			{ action: "read", resource: "*.env.*", effect: "ask" },
 			{ action: "read", resource: "*.env.example", effect: "allow" },
 			{ action: "subagent", resource: "*", effect: "deny" },
+			// Pi addition: pi-vcc's context recall.
+			{ action: "vcc_recall", resource: "*", effect: "allow" },
+			// V2 merges this after the deny-all, so outside paths ask rather than deny.
+			{ action: "external_directory", resource: "*", effect: "ask" },
 		],
 	},
 	builtinScout(),

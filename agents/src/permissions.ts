@@ -15,6 +15,8 @@ import type { AgentDefinition, PermissionRule } from "./types.ts";
 const TOOL_ACTIONS = new Map<string, string>([
 	["read", "read"], ["bash", "bash"], ["powershell", "bash"], ["edit", "edit"], ["write", "edit"],
 	["grep", "grep"], ["find", "glob"], ["ls", "list"], ["webfetch", "webfetch"], ["websearch", "websearch"],
+	// pi-web-access-lean routes search and fetch through one tool.
+	["web_access", "websearch"],
 	["subagent", "subagent"], ["questionnaire", "question"],
 ]);
 
@@ -155,6 +157,18 @@ export function whollyDisabled(action: string, permissions: PermissionRule[]): b
 /** Filter actual registered/selected names; visibility never grants a call permission. */
 export function filterToolNames(permissions: PermissionRule[], names: readonly string[]): string[] {
 	return names.filter((name) => !whollyDisabled(permissionActionFor(name) ?? name, permissions));
+}
+
+/**
+ * Registered tools whose action the rules allow by name for every resource.
+ * A child activates these even when Pi's default selection omits them
+ * (V2's Explore has grep/glob; Pi's defaults do not include grep/find/ls).
+ */
+export function explicitlyAllowedTools(permissions: PermissionRule[], names: readonly string[]): string[] {
+	return filterToolNames(permissions, names.filter((name) => {
+		const action = permissionActionFor(name) ?? name;
+		return permissions.some((rule) => rule.action === action && rule.resource === "*" && rule.effect === "allow");
+	}));
 }
 
 /**

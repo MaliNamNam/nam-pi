@@ -46,6 +46,7 @@ async function harness(t: TestContext, flags: Record<string, unknown> = {}) {
 		registerTool: (tool: any) => tools.set(tool.name, tool),
 		registerCommand: (name: string, command: any) => commands.set(name, command), registerMessageRenderer() {},
 		getActiveTools: () => ["read", "write", "bash", "subagent"], setActiveTools() {},
+		getAllTools: () => ["read", "write", "bash", "subagent"].map((name) => ({ name })),
 		sendMessage: (message: any, options: any) => notices.push({ message, options }),
 	} as unknown as ExtensionAPI;
 	const model = { provider: "fixture", id: "small", name: "Small", api: "openai-completions", reasoning: false, input: ["text"],

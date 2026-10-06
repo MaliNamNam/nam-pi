@@ -62,7 +62,7 @@ import {
 	unavailableModelMessage,
 	unavailableVariantMessage,
 } from "./src/models.ts";
-import { canDispatch, DEFAULT_AGENT_PERMISSIONS, filterToolNames } from "./src/permissions.ts";
+import { canDispatch, DEFAULT_AGENT_PERMISSIONS, explicitlyAllowedTools, filterToolNames } from "./src/permissions.ts";
 import { MAX_STEPS_CUSTOM_TYPE, MAX_STEPS_PROMPT, StepCounter, TOOLS_DISABLED_MESSAGE } from "./src/steps.ts";
 import { ChildProgress, type SubagentToolDetails } from "./src/progress.ts";
 import { completedSubagentResult, subagentResultOutput } from "./src/subagent-result.ts";
@@ -476,7 +476,10 @@ export default function agents(pi: ExtensionAPI): void {
 		const agent = currentAgent();
 		const cap = agent && !agent.toolsFromPermissions && agent.tools
 			? new Set([...agent.tools, "subagent"]) : undefined;
-		const candidates = unrestrictedTools.filter((name) => !cap || cap.has(name));
+		// A child also activates registered tools its rules allow by name, even
+		// when Pi's default selection leaves them off (Explore's grep/find/ls).
+		const named = runningAsSubagent ? explicitlyAllowedTools(activeRules(), pi.getAllTools().map((tool) => tool.name)) : [];
+		const candidates = [...new Set([...unrestrictedTools, ...named])].filter((name) => !cap || cap.has(name));
 		const selected = filterToolNames(activeRules(), candidates).filter((name) =>
 			!runningAsSubagent || !strictShellEnabled() || !["bash", "powershell"].includes(name));
 		if (selected.length !== active.length || selected.some((name) => !active.includes(name))) pi.setActiveTools(selected);
