@@ -5,9 +5,18 @@
  * macOS Terminal.app look: a title bar with red/yellow/green traffic lights and
  * a rounded box-drawing frame around the command and its output.
  *
- * The title bar shows the tool the "terminal" is for (`read`, `edit`, `write`,
- * `grep`, `find`, `ls`) with the target path/pattern right-aligned, and the
- * command is drawn after a shell prompt in the body.
+ * The title bar shows the tool the "terminal" is for (`write`, `grep`, `find`,
+ * `ls`) with the target path/pattern right-aligned, and the command is drawn
+ * after a shell prompt in the body.
+ *
+ * read and edit are deliberately NOT re-registered here. pi-hashline-edit-pro
+ * registers its own anchored `read`, and pi fails the extension load on
+ * duplicate tool names between extensions; re-registering built-in `edit`
+ * would also resurrect the fuzzy-match edit tool that hashline disables by
+ * design. Tools without a specialized renderer — including hashline's
+ * read/replace/insert — are still framed by the generic
+ * ToolExecutionComponent hook below. If hashline is ever uninstalled, restore
+ * the read/edit registrations from this file's git history.
  *
  * bash and powershell are deliberately absent: the `agents` extension registers
  * those names to wrap their execution, and pi resolves a duplicate tool name
@@ -36,11 +45,9 @@
 
 import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
-	createEditToolDefinition,
 	createFindToolDefinition,
 	createGrepToolDefinition,
 	createLsToolDefinition,
-	createReadToolDefinition,
 	createWriteToolDefinition,
 	ToolExecutionComponent,
 } from "@earendil-works/pi-coding-agent";
@@ -556,87 +563,6 @@ export default function (pi: ExtensionAPI) {
 	// duplicate tool name first-wins, so a registration here would be ignored and
 	// the frame would silently not appear. Its `src/mac-frame.ts` supplies the same
 	// renderers to those registrations instead.
-
-	// -----------------------------------------------------------------------
-	// read: cat, with syntax colour from the tool preserved
-	// -----------------------------------------------------------------------
-	const originalRead = createReadToolDefinition(cwd);
-	registerTool({
-		...originalRead,
-		renderShell: "self",
-
-		renderCall(args, theme, context) {
-			const a = args ?? {};
-			const extra = [
-				a.offset ? `offset=${a.offset}` : "",
-				a.limit ? `limit=${a.limit}` : "",
-			]
-				.filter(Boolean)
-				.join(" ");
-			return callFrame(theme, context, "read", `cat ${str(a.path)}${extra ? `  (${extra})` : ""}`);
-		},
-
-		renderResult(result, { expanded, isPartial }, theme, context) {
-			if (result.content.some((c) => c.type === "image")) {
-				return useFrame(
-					context,
-					"result",
-					bottomFrame(theme, { rows: [[seg("🖼  image loaded", { fg: GREEN })]], running: isPartial }),
-				);
-			}
-			const text = textOf(result);
-			return useFrame(
-				context,
-				"result",
-				bottomFrame(theme, { ansiRows: ansiBodyFromText(text, expanded), running: isPartial }),
-			);
-		},
-	});
-
-	// -----------------------------------------------------------------------
-	// edit: diff with add/remove colouring
-	// -----------------------------------------------------------------------
-	const originalEdit = createEditToolDefinition(cwd);
-	registerTool({
-		...originalEdit,
-		renderShell: "self",
-
-		renderCall(args, theme, context) {
-			const a = args ?? {};
-			return callFrame(theme, context, "edit", `edit ${str(a.path)}`);
-		},
-
-		renderResult(result, { expanded, isPartial }, theme, context) {
-			const details = result.details as { diff?: string } | undefined;
-			const text = textOf(result);
-
-			if (!details?.diff) {
-				const first = text.split("\n")[0] || "applied";
-				const failed = /^error/i.test(first);
-				return useFrame(
-					context,
-					"result",
-					bottomFrame(theme, {
-						rows: [[seg(failed ? `✗ ${first}` : `✓ ${first}`, { fg: failed ? DEL : GREEN })]],
-						running: isPartial,
-					}),
-				);
-			}
-
-			const diffLines = sanitizeForFrame(details.diff).split("\n");
-			const cap = expanded ? EXPANDED_ROWS : COLLAPSED_ROWS;
-			const rows: Seg[][] = [];
-			for (const line of diffLines.slice(0, cap)) {
-				if (line.startsWith("+") && !line.startsWith("+++")) rows.push([seg(line, { fg: ADD })]);
-				else if (line.startsWith("-") && !line.startsWith("---")) rows.push([seg(line, { fg: DEL })]);
-				else rows.push([seg(line, { fg: MUTED, dim: true })]);
-			}
-			if (diffLines.length > cap) {
-				rows.push([seg(`… ${diffLines.length - cap} more diff lines (ctrl+e to expand)`, { fg: MUTED, dim: true })]);
-			}
-			return useFrame(context, "result", bottomFrame(theme, { rows, running: isPartial }));
-		},
-	});
 
 	// -----------------------------------------------------------------------
 	// write: path, line count, optional content preview
