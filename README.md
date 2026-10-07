@@ -15,6 +15,7 @@ Loaded from `~/.pi/agent/extensions`.
 | `neutral-preamble.ts` | single-file | Removes Pi's default identity sentence from outgoing system prompts, preserving all other instructions |
 | `pi-models.ts` | single-file | Model/provider config from `pi.jsonc` (local `pi-models.ts` extension) |
 | `pi-splash.ts` | single-file | Splash screen while pi starts up |
+| `clean-copy.ts` | single-file | Strips conversation-frame chrome from mouse-selection copies in fullscreen mode |
 | `quiet-chrome.ts` | single-file | Trims pi's default TUI chrome for a quieter UI |
 
 ## Install
@@ -50,6 +51,7 @@ Everything the current setup loads, and where it lives in this repo:
 | `pi-models.ts` | `pi-models.ts` | Own — loads models from `pi.jsonc` |
 | `pi-splash.ts` | `pi-splash.ts` | Own — 3D renderer adapted from [mavam/pi-splash](https://github.com/mavam/pi-splash) (MIT) |
 | `quiet-chrome.ts` | `quiet-chrome.ts` | Own |
+| `clean-copy.ts` | `clean-copy.ts` | Own |
 | *(npm)* `@ssk_dev/pi-web-access-lean` | — | [kunkun9527/pi-web-access-lean](https://github.com/kunkun9527/pi-web-access-lean) (MIT) |
 | *(npm)* `@sting8k/pi-vcc` | — | [sting8k/pi-vcc](https://github.com/sting8k/pi-vcc) (MIT) |
 
@@ -61,6 +63,7 @@ Everything the current setup loads, and where it lives in this repo:
 - Conversation frames: right-aligned user prompts (`👤`), left-aligned replies (`🤖`) and thoughts (`🧠`), with subtle opposite-side gutters matching the side panel's rounded border. Tests: `node --test test/conversation-frames.test.mjs` (same `PI_TEST_PACKAGE_DIR` override; `CONVERSATION_FRAME_EXTENSION_DIR` can point to an installed copy's `extensions/` directory).
 - Prompt-budget tests: `node --test test/prompt-budget.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Checks compact agent-tool guidance while preserving tool availability and parameter contracts.
 - Neutral-preamble tests: `node --test test/neutral-preamble.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Removes only the default identity, including on resumed requests; custom prompts, quoted source, and tool transitions remain intact.
+- Clean copies: mouse drag-selection in fullscreen mode copies exactly what is on screen, and the conversation frames draw `│` chrome on every row, so `clean-copy.ts` wraps `TuiAltScreen.getActiveSelectionText` to strip border rows and edge cells (blockquote bars, table cells and `tree` markers survive). Tests: `node --test test/clean-copy.test.mjs` (same `PI_TEST_PACKAGE_DIR` override).
 - `node_modules/` is gitignored; run `npm install` inside `agents/`, `safeguards/` and `pi-side-panel/` as needed.
 - Third-party npm packages are pinned in `~/.pi/agent/settings.json` and live in `~/.pi/agent/npm/` — nothing from them is committed here.
 - Attribution for adapted third-party code is in each extension's license file or header comment.
