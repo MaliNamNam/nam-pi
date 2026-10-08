@@ -17,6 +17,7 @@ Loaded from `~/.pi/agent/extensions`.
 | `pi-splash.ts` | single-file | Splash screen while pi starts up |
 | `clean-copy.ts` | single-file | Strips conversation-frame chrome from mouse-selection copies in fullscreen mode |
 | `quiet-chrome.ts` | single-file | Trims pi's default TUI chrome for a quieter UI |
+| `pi-image.ts` | single-file | opencode-style image paste — Ctrl+V shows an `[Image N]` chip with a thumbnail and attaches the image to the message |
 
 ## Install
 
@@ -52,6 +53,7 @@ Everything the current setup loads, and where it lives in this repo:
 | `pi-splash.ts` | `pi-splash.ts` | Own — 3D renderer adapted from [mavam/pi-splash](https://github.com/mavam/pi-splash) (MIT) |
 | `quiet-chrome.ts` | `quiet-chrome.ts` | Own |
 | `clean-copy.ts` | `clean-copy.ts` | Own |
+| `pi-image.ts` | `pi-image.ts` | Own — paste flow modeled on [OpenCode v2](https://opencode.ai/docs)'s TUI |
 | *(npm)* `@ssk_dev/pi-web-access-lean` | — | [kunkun9527/pi-web-access-lean](https://github.com/kunkun9527/pi-web-access-lean) (MIT) |
 | *(npm)* `@sting8k/pi-vcc` | — | [sting8k/pi-vcc](https://github.com/sting8k/pi-vcc) (MIT) |
 
@@ -64,6 +66,7 @@ Everything the current setup loads, and where it lives in this repo:
 - Prompt-budget tests: `node --test test/prompt-budget.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Checks compact agent-tool guidance while preserving tool availability and parameter contracts.
 - Neutral-preamble tests: `node --test test/neutral-preamble.test.mjs` (same `PI_TEST_PACKAGE_DIR` override). Removes only the default identity, including on resumed requests; custom prompts, quoted source, and tool transitions remain intact.
 - Clean copies: mouse drag-selection in fullscreen mode copies exactly what is on screen, and the conversation frames draw `│` chrome on every row, so `clean-copy.ts` wraps `TuiAltScreen.getActiveSelectionText` to strip border rows and edge cells (blockquote bars, table cells and `tree` markers survive). Tests: `node --test test/clean-copy.test.mjs` (same `PI_TEST_PACKAGE_DIR` override).
+- Image paste: `pi-image.ts` does not replace the editor (pi-side-panel and agents own it). A raw terminal-input listener catches Ctrl+V — which Windows Terminal delivers as an empty bracketed paste when the clipboard holds only an image — and Alt+V, reads the clipboard (copied files, then image, then text), and inserts through `ctx.ui.pasteToEditor`, so it works with whichever editor is active. An image inserts an `[Image N]` token and a truecolor half-block thumbnail strip above the editor. The token stays in the submitted text and the image is attached via the `input` event; deleting the token drops it. Tests: `node --test test/pi-image.test.mjs` (same `PI_TEST_PACKAGE_DIR` override; the clipboard cases run on Windows only).
 - `node_modules/` is gitignored; run `npm install` inside `agents/`, `safeguards/` and `pi-side-panel/` as needed.
 - Third-party npm packages are pinned in `~/.pi/agent/settings.json` and live in `~/.pi/agent/npm/` — nothing from them is committed here.
 - Attribution for adapted third-party code is in each extension's license file or header comment.
