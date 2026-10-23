@@ -9,14 +9,15 @@
  * `ls`) with the target path/pattern right-aligned, and the command is drawn
  * after a shell prompt in the body.
  *
- * read and edit are deliberately NOT re-registered here. pi-hashline-edit-pro
- * registers its own anchored `read`, and pi fails the extension load on
- * duplicate tool names between extensions; re-registering built-in `edit`
- * would also resurrect the fuzzy-match edit tool that hashline disables by
- * design. Tools without a specialized renderer — including hashline's
- * read/replace/insert — are still framed by the generic
- * ToolExecutionComponent hook below. If hashline is ever uninstalled, restore
- * the read/edit registrations from this file's git history.
+ * read, edit, and grep are deliberately NOT re-registered here.
+ * pi-hashline-edit-pro registers its own anchored `read` and `grep`, and pi
+ * fails the extension load on duplicate tool names between extensions;
+ * re-registering built-in `edit` would also resurrect the fuzzy-match edit
+ * tool that hashline disables by design. Tools without a specialized
+ * renderer — including hashline's read/replace/insert and its grep — are
+ * still framed by the generic ToolExecutionComponent hook below. If hashline
+ * is ever uninstalled, restore the read/edit/grep registrations from this
+ * file's git history.
  *
  * bash and powershell are deliberately absent: the `agents` extension registers
  * those names to wrap their execution, and pi resolves a duplicate tool name
@@ -46,7 +47,6 @@
 import type { ExtensionAPI, Theme, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
 	createFindToolDefinition,
-	createGrepToolDefinition,
 	createLsToolDefinition,
 	createWriteToolDefinition,
 	ToolExecutionComponent,
@@ -605,7 +605,12 @@ export default function (pi: ExtensionAPI) {
 	});
 
 	// -----------------------------------------------------------------------
-	// grep / find / ls: read-only search tools.
+	// find / ls: read-only search tools.
+	//
+	// grep is NOT registered here: pi-hashline-edit-pro registers `grep`, and
+	// pi fails the extension load on duplicate tool names between extensions.
+	// The generic ToolExecutionComponent hook below still frames hashline's
+	// grep, using the built-in grep renderers inside the window.
 	//
 	// These are off by default in pi. Spreading their definitions would leave
 	// `defaultActive` undefined, which pi treats as "activate on registration",
@@ -613,31 +618,6 @@ export default function (pi: ExtensionAPI) {
 	// keeps the agent's toolset exactly as it was; if the user did enable one,
 	// pi keeps it active and it simply renders framed.
 	// -----------------------------------------------------------------------
-	const originalGrep = createGrepToolDefinition(cwd);
-	registerTool({
-		...originalGrep,
-		defaultActive: false,
-		renderShell: "self",
-
-		renderCall(args, theme, context) {
-			const a = args ?? {};
-			const flags = [a.ignoreCase ? "-i" : "", a.literal ? "-F" : "", a.glob ? `--glob ${str(a.glob)}` : ""]
-				.filter(Boolean)
-				.join(" ");
-			const command = `grep ${flags ? `${flags} ` : ""}${str(a.pattern) || "…"}${a.path ? ` ${str(a.path)}` : ""}`;
-			return callFrame(theme, context, "grep", command);
-		},
-
-		renderResult(result, { expanded, isPartial }, theme, context) {
-			const text = textOf(result);
-			return useFrame(
-				context,
-				"result",
-				bottomFrame(theme, { ansiRows: ansiBodyFromText(text, expanded), running: isPartial }),
-			);
-		},
-	});
-
 	const originalFind = createFindToolDefinition(cwd);
 	registerTool({
 		...originalFind,

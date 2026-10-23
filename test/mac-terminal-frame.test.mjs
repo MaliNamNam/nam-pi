@@ -226,13 +226,14 @@ test("image-only results keep the native fallback indicator", (t) => {
 
 test("built-ins and tracked shell frames are not framed twice or activated differently", (t) => {
 	const { tools } = harness(t);
-	// read and edit are not re-registered: pi-hashline-edit-pro owns `read` (its
-	// anchored read) and disables built-in `edit` by design; a duplicate read
-	// registration fails the extension load.
-	assert.deepEqual([...tools.keys()], ["write", "grep", "find", "ls"]);
+	// read, edit, and grep are not re-registered: pi-hashline-edit-pro owns
+	// anchored `read` and `grep` and disables built-in `edit` by design; a
+	// duplicate registration fails the extension load.
+	assert.deepEqual([...tools.keys()], ["write", "find", "ls"]);
 	assert.equal(tools.has("read"), false);
 	assert.equal(tools.has("edit"), false);
-	for (const name of ["grep", "find", "ls"]) assert.equal(tools.get(name).defaultActive, false);
+	assert.equal(tools.has("grep"), false);
+	for (const name of ["find", "ls"]) assert.equal(tools.get(name).defaultActive, false);
 	for (const [name, definition] of [...tools, ["bash", shellFrameRenderers("bash")], ["powershell", shellFrameRenderers("powershell")]]) {
 		const component = tool(name, definition, { path: "fixture.ts", command: "echo test" });
 		finish(component);
