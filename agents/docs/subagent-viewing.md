@@ -45,8 +45,8 @@ behavior. RPC/plain clients still get a text preview.
 
 ## Verification
 
-- `npm run typecheck` and `npm test` in `pi-opencode-agents`.
-- `npm run typecheck`, `npm test`, and `npm run test:agents` in `pi-side-panel`.
+- `npm run typecheck` and `npm test` in `agents`.
+- `npm run typecheck` in `pi-side-panel`, plus the root `test/subagent-sidebar.test.mjs` and `test/worktree-ui.test.mjs`.
 - Native component fixtures cover root Markdown transforms, padding/thinking,
   other-extension tools/messages/entries, full-history spend/files/loadout,
   renderer width bounds and hidden messages.

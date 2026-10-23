@@ -8,7 +8,7 @@ Every tool call resolves to one of three effects â€” `allow`, `ask`, or `deny` â
 
 ```bash
 mkdir -p ~/.pi/agent/extensions
-cp -r pi-opencode-safeguards ~/.pi/agent/extensions/safeguards
+cp -r safeguards ~/.pi/agent/extensions/safeguards
 ```
 
 Pi loads the extension at startup. Works with **zero configuration**: it starts from OpenCode's permissive defaults plus its safety guards.
@@ -126,13 +126,13 @@ The paired root dialog offers **Always for this Pi session**, not a persistent p
 
 ## Development
 
+Safeguards has no separate package or test runner. Its engine and Pi integration are exercised by the agents suite (`agents/test/worktree-dispatch.test.ts` and `agents/test/config.test.ts`):
+
 ```bash
+cd ../agents
 npm install
-npm run typecheck
 npm test
 ```
-
-The test suite covers wildcard matching, rule precedence, deny-over-saved-grant, JSONC parsing, config extraction, shell parsing, and doom-loop hashing.
 
 ## Layout
 

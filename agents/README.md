@@ -8,7 +8,7 @@ Build, General, and Explore are based on OpenCode v2's built-ins (`packages/core
 
 ```bash
 mkdir -p ~/.pi/agent/extensions
-cp -r pi-opencode-agents ~/.pi/agent/extensions/agents
+cp -r agents ~/.pi/agent/extensions/agents
 ```
 
 ## Built-in agents

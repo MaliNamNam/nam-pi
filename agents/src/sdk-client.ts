@@ -104,7 +104,7 @@ export class SDKWorkerClient {
 				if (message.type === "boot_error") { clearTimeout(timer); reject(new SDKUnavailable(message.error)); return; }
 				void this.receive(message);
 			});
-			worker.once("error", (error) => { clearTimeout(timer); reject(new SDKUnavailable(error.message)); });
+			worker.once("error", (error) => { clearTimeout(timer); reject(new SDKUnavailable(error instanceof Error ? error.message : String(error))); });
 			worker.once("exit", (code) => {
 				clearTimeout(timer);
 				const error = new Error(`SDK worker exited (${code})${this.diagnostics ? ": " + this.diagnostics.trim() : ""}`);

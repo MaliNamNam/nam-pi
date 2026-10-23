@@ -373,29 +373,21 @@ fallback. The editor keeps keyboard focus either way.
 ## Development
 
 ```bash
-npm run setup       # link the host Pi packages into node_modules
-npm run typecheck   # tsc against the real Pi type definitions
-npm test            # entry-point and sidebar tests
-npm run test:agents # paired agents + sidebar regression fixtures (repos side by side)
+npm install
+npm run typecheck   # tsc against the Pi type definitions
 ```
 
-`npm run setup` symlinks `@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
-and `@types/node` from your Pi installation, so the extension is checked against
-the exact API it runs on. The tests load the extension through `jiti` (Pi's own
-loader) and assert that the sections render in order, every rendered line fits
-its width, the Resources and Context counts refresh after a render, Last Turn
-collapses when it is empty and pushes the divider down by exactly its rows when
-it is not, the status box keeps its lettering in both the working and idle
-states, lettering fits variable word lengths and box sizes, no spinner appears,
-and the resource toggles round-trip through real settings files in a throwaway
-agent directory.
+Behavioral tests live in the repository root and load the extension through
+`jiti` (Pi's own loader) against the installed Pi package:
 
-`npm run test:installed` runs a smaller check against the deployed copy under
-`~/.pi/agent/extensions/pi-side-panel`, which is what Pi actually loads — the
-repo and the installed copy are separate, so a green repo suite does not prove
-the running extension is current. The spotlight suite also covers the border
-light: it starts at the bottom-right corner, wraps at the box's perimeter,
-lights only frame cells, and goes dark the moment the agent settles.
+```bash
+# from the repository root
+node --test test/subagent-sidebar.test.mjs test/worktree-ui.test.mjs \
+  test/subagent-model-picker.test.mjs test/conversation-frames.test.mjs
+```
+
+They cover sidebar rows and widths, child workspace pages, the subagent model
+picker, and conversation frames. See the root README for `PI_TEST_PACKAGE_DIR`.
 
 ## Layout
 
@@ -409,13 +401,6 @@ pi-side-panel/
 │       ├── resources.ts      the resource catalog and its settings toggles
 │       ├── sidebar-split.ts  the layout-root wrapper
 │       └── …                 composer, dock, and layout helpers
-├── scripts/
-│   ├── link-host.mjs         links the host Pi packages
-│   ├── sync-slate.mjs        copies the vendored pi-slate modules
-│   ├── test-load.mjs         extension entry-point smoke test
-│   ├── test-dock.mjs         section layout, facts, and line widths
-│   ├── test-resources.mjs    resource listing and toggle round-trips
-│   └── test-installed.mjs    checks the deployed copy under ~/.pi
 ├── package.json
 └── tsconfig.json
 ```

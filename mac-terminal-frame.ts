@@ -5,8 +5,8 @@
  * macOS Terminal.app look: a title bar with red/yellow/green traffic lights and
  * a rounded box-drawing frame around the command and its output.
  *
- * The title bar shows the tool the "terminal" is for (`write`, `grep`, `find`,
- * `ls`) with the target path/pattern right-aligned, and the command is drawn
+ * The title bar shows the tool the "terminal" is for (`write`, `find`, `ls`)
+ * with the target path/pattern right-aligned, and the command is drawn
  * after a shell prompt in the body.
  *
  * read, edit, and grep are deliberately NOT re-registered here.
