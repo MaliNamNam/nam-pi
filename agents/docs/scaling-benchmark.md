@@ -9,10 +9,11 @@ scans. See the [2026-10-04 handoff checkpoint](handoff-profile.md) for the measu
 correction and lossless compact-result change. Do not present the old tail numbers
 as isolated extension/TUI latency or compare them directly with the corrected reader.
 
-Raw results: [`../test/results/scaling-2026-10-03.json`](../test/results/scaling-2026-10-03.json).
+The raw result files from this run are not included in this repository; the
+figures below are the recorded summary. To reproduce with the current code:
 
 ```powershell
-node test/live-scaling.mjs --output test/results/scaling-local.json
+node test/live-scaling.mjs --output scaling.json
 ```
 
 ## Method

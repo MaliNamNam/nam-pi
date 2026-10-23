@@ -16,8 +16,8 @@ configured disabled ID, and changes only fields present in each later entry.
 This applies equally to builtins and custom agents. It does not require a
 custom description; `src/tool/plugin/subagent.ts` supplies fallback listing text.
 
-Six regressions in `test/config-parity.test.ts` first failed against our prior
-implementation, then passed with these corrections:
+Six parity regressions first failed against our prior implementation, then
+passed with these corrections:
 
 - Disabled JSON/Markdown entries now remove a builtin or earlier custom agent,
   rather than being skipped and accidentally leaving the earlier agent enabled.
@@ -31,14 +31,14 @@ implementation, then passed with these corrections:
   matching `src/agent.ts`'s fallback. If no primary exists, tool policies fail closed
   instead of falling back to unrestricted baseline permissions.
 
-`test/live-subagent.mjs` also exercises a description-less Markdown agent and a
+The live subagent fixture also exercised a description-less Markdown agent and a
 partial project override retaining the user-configured model, in both runners.
 The public name `mergeOverBuiltin()` remains for compatibility, but its merging
 now applies to all earlier definitions.
 
 ## Permission-derived loadouts — follow-up fixed
 
-The [verified loadout checkpoint](permission-loadouts.md) closes the stale
+The verified loadout checkpoint closed the stale
 inherited allowlist issue below. Final merged rules now drive declarations;
 legacy aliases share the call-guard mapping, and both runners filter the actual
 loaded catalog instead of a frozen builtin list. Root/primary empty policies,
@@ -75,10 +75,10 @@ complete configuration or live agent/model-switch parity.
 
 - Upstream: `src/tool/plugin/subagent.ts` admits a prompt before joining the
   existing job; a running child's input steers it. The reference test
-  `test/tool-subagent.test.ts`, “steers a running child session in the background”,
+  upstream `test/tool-subagent.test.ts`, “steers a running child session in the background”,
   proves this is supported behavior, not an inference from docs.
 - Reproduced: the old extension rejected a live SDK child with “pending background
-  result” in `test/live-steering.mjs`, before changing the implementation.
+  result” in a live steering fixture, before changing the implementation.
 - Implemented: direct-parent ownership checks precede admission through the
   original subprocess's private RPC stdin or SDK run-ID capability. Admission
   is ordered and acknowledged (`queued` or extension-`handled`), not completion.
@@ -177,5 +177,4 @@ Windows Pi 1.0/Node v24.18.0 RPC exits after a steered turn reproduced a native
 `UV_HANDLE_CLOSING` assertion with **no extensions**. Idle acknowledgement alone
 still failed; a 100 ms exit/drain grace passed the controlled probe. The process
 client applies that Windows-only grace and still surfaces nonzero exit/error
-markers. See `test/live-rpc-shutdown.mjs`; Pi itself was inspected read-only,
-not patched.
+markers. Pi itself was inspected read-only, not patched.

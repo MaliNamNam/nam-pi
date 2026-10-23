@@ -9,8 +9,7 @@ remains default and the SDK worker remains opt-in.
 The historical [scaling checkpoint](scaling-benchmark.md) observed long root RPC
 pauses, but did not establish that all of their cost belonged to the extension.
 A fresh run with the steering-capable transport reproduced streaming maxima of
-356–659 ms at eight children:
-[`scaling-steering-baseline-2026-10-04.json`](../test/results/scaling-steering-baseline-2026-10-04.json).
+356–659 ms at eight children.
 
 V8 main-thread profiles attributed substantial sampled time to native stdout
 writes. These samples can include **blocked I/O**, not just busy CPU. The fixture
@@ -21,8 +20,7 @@ several MiB; this induced receiver-side copying/scanning and transport backpress
 `test/helpers/jsonl-lines.ts` now scans each incoming chunk once and joins fragments
 only when LF arrives. It preserves split UTF-8, CRLF and Unicode separators, which
 are payload characters rather than JSONL boundaries. With **production extension
-code unchanged**, eight-child maxima fell to 138–220 ms:
-[`handoff-linear-reader-2026-10-04.json`](../test/results/handoff-linear-reader-2026-10-04.json).
+code unchanged**, eight-child maxima fell to 138–220 ms.
 This is a benchmark correction, **not an installed TUI performance improvement**.
 Do not compare historical RPC tails to new results without this qualification.
 
@@ -32,8 +30,8 @@ streaming/handoff windows, `serializeJsonLine` accumulated about 67–76 ms of s
 samples, and `writeRawStdoutChunk` about 99–123 ms of inclusive samples. Inclusive
 rows overlap; these are not per-event latency measurements. Inspector start/stop
 also contributes overhead and must not be interpreted as production work.
-See [`handoff-profile-summary-2026-10-04.json`](../test/results/handoff-profile-summary-2026-10-04.json).
-Raw `.cpuprofile` files remain in the local temp directories named by the reports.
+The raw result JSON and `.cpuprofile` files from these runs are not included in
+this repository; the figures here are the recorded summary.
 
 ## Extension-side change: one copy of large tool output
 
@@ -65,20 +63,17 @@ Same corrected harness, no profiler, both cold/warm batches:
 | SDK | cold | 145.5 ms | 68.7 ms |
 | SDK | warm | 147.2 ms | 78.7 ms |
 
-Sources: [`handoff-linear-baseline-matched-2026-10-04.json`](../test/results/handoff-linear-baseline-matched-2026-10-04.json)
-and [`handoff-compact-repeat-2026-10-04.json`](../test/results/handoff-compact-repeat-2026-10-04.json).
 The baseline fixture used backed-up pre-compaction `index.ts`/`progress.ts` with the
-same otherwise unchanged source tree. An earlier compact run observed 86–112 ms:
-[`handoff-compact-results-2026-10-04.json`](../test/results/handoff-compact-results-2026-10-04.json).
+same otherwise unchanged source tree. An earlier compact run observed 86–112 ms.
 Timing varies with system load/GC; these few runs are not a statistical speedup
 claim, confidence interval, keyboard-latency measurement or performance guarantee.
 
 ## Reproduce
 
 ```powershell
-node test/live-scaling.mjs --counts 8 --output test/results/handoff-local.json
-node test/live-scaling.mjs --counts 8 --backends sdk --profile-dir "$env:TEMP/pi-handoff-profiles" --output test/results/handoff-profile-local.json
-node test/summarize-profile.mjs --output test/results/handoff-summary-local.json "$env:TEMP/pi-handoff-profiles/sdk-8-warm.cpuprofile"
+node test/live-scaling.mjs --counts 8 --output handoff.json
+node test/live-scaling.mjs --counts 8 --backends sdk --profile-dir "$env:TEMP/pi-handoff-profiles" --output handoff-profile.json
+node test/summarize-profile.mjs --output handoff-summary.json "$env:TEMP/pi-handoff-profiles/sdk-8-warm.cpuprofile"
 ```
 
 Without `--counts`/`--backends`, the original 1/4/8 × process/SDK matrix remains.
@@ -91,9 +86,10 @@ use, and owner shutdown must succeed. Set `PI_AGENT_EXTENSION_DIR` and optionall
 
 ## Validation and remaining work
 
-Typecheck and all **280** unit/behavioral tests pass, including saved-result
-Markdown rendering, range validation, metadata compatibility, large/Unicode
-JSONL framing and weighted CPU-profile summaries. Live scaling fixtures assert
+At this checkpoint, typecheck and all **280** unit/behavioral tests in the original
+development workspace passed, including saved-result Markdown rendering, range
+validation, metadata compatibility, large/Unicode JSONL framing and weighted
+CPU-profile summaries. Live scaling fixtures assert
 full output and real SDK execution rather than permitting silent fallback.
 
 The selectively deployed copy also passed the eight-child scaling fixture and,
@@ -101,8 +97,7 @@ paired with installed safeguards, both runners' steering, continuation/lifecycle
 root forms, explicit-decline, sibling-isolation and shutdown suites. Its existing
 Windows native-shell differences were preserved. The installed unprofiled RPC
 maxima were 100–134 ms, again illustrating run-to-run variability rather than a
-guaranteed latency ceiling:
-[`handoff-installed-2026-10-04.json`](../test/results/handoff-installed-2026-10-04.json).
+guaranteed latency ceiling.
 Run `/reload` to load the installed metadata change in an existing Pi session.
 
 No claim is made about interactive Markdown/TUI handoff latency. Large complete

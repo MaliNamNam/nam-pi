@@ -63,22 +63,24 @@ child agent and model, not its original launch label.
 
 ## Verification
 
-Typecheck and **304 tests** pass, including staged configuration ordering,
-validation, cancellation/failure, Unicode/image cleanup, explicit RPC preparation
+Recorded at this checkpoint, when the live fixtures lived in the original
+development workspace and are not part of this repository. Typecheck and
+**304 tests** passed, including staged configuration ordering, validation,
+cancellation/failure, Unicode/image cleanup, explicit RPC preparation
 acknowledgements, concurrent owner role/status updates and revoked generations.
 
-`test/live-switching.mjs` runs against both real Pi transports with an isolated
-local provider. It holds the old request, switches to a read-only agent, verifies
-that the old tool batch still writes, then checks the next prompt/model/tools,
-sampling and step limit. Model-only and agent-back switches keep history and
-admit each task once; siblings stay live and isolated. The SDK fixture verifies
-persisted runner metadata (no hidden subprocess fallback), and rejects a
-nested-capable target without admitting its task. Repeat with
-`PI_SWITCH_STEERING_MODE=all` to verify unsupported-mode rejection.
+The live switching fixture ran against both real Pi transports with an isolated
+local provider. It held the old request, switched to a read-only agent, verified
+that the old tool batch still wrote, then checked the next prompt/model/tools,
+sampling and step limit. Model-only and agent-back switches kept history and
+admitted each task once; siblings stayed live and isolated. The SDK fixture
+verified persisted runner metadata (no hidden subprocess fallback), and rejected a
+nested-capable target without admitting its task. All-at-once steering mode was
+verified to be rejected.
 
-`test/live-steering.mjs` continues to cover ordered input, foreground rejoining,
+The live steering fixture continued to cover ordered input, foreground rejoining,
 parent responsiveness, one background delivery and retained model/policy/history.
-The loadout fixture checks declaration/call agreement on both runners.
+The loadout fixture checked declaration/call agreement on both runners.
 
 The selectively installed copy also passed switching (normal/all-at-once),
 steering, paired installed-safeguards forms, decline/recovery, subagent

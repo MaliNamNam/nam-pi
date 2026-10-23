@@ -47,10 +47,9 @@ behavior. RPC/plain clients still get a text preview.
 
 - `npm run typecheck` and `npm test` in `agents`.
 - `npm run typecheck` in `pi-side-panel`, plus the root `test/subagent-sidebar.test.mjs` and `test/worktree-ui.test.mjs`.
-- Native component fixtures cover root Markdown transforms, padding/thinking,
+- At this checkpoint, native component fixtures in the original development
+  workspace also covered root Markdown transforms, padding/thinking,
   other-extension tools/messages/entries, full-history spend/files/loadout,
-  renderer width bounds and hidden messages.
-- Paired-extension fixtures exercise Pi's real regular/fullscreen renderers,
-  child-only stats/files versus conflicting root facts, overlay suspension and
-  restoration, navigation and preservation of the root draft.
-- Process and SDK live switching/continuation/lifecycle checks remain passing.
+  renderer width bounds, hidden messages, Pi's real regular/fullscreen
+  renderers, overlay suspension and restoration, navigation and preservation of
+  the root draft. Those fixtures are not part of this repository.

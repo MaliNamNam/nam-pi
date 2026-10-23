@@ -53,6 +53,8 @@ Installed with Pi's package manager into `~/.pi/agent/npm` (`settings.json` → 
 | [`@ssk_dev/pi-web-access-lean`](https://www.npmjs.com/package/@ssk_dev/pi-web-access-lean) | [kunkun9527/pi-web-access-lean](https://github.com/kunkun9527/pi-web-access-lean) (MIT) | Lean web access: search, URL fetching, PDF extraction, YouTube/video understanding |
 | [`@sting8k/pi-vcc`](https://www.npmjs.com/package/@sting8k/pi-vcc) | [sting8k/pi-vcc](https://github.com/sting8k/pi-vcc) (MIT) | Algorithmic conversation compaction: transcript-preserving summaries, no LLM calls |
 
+Also loaded in this setup but not part of this repo: `herdr-agent-state.ts`, the [herdr](https://github.com/herdrdev/herdr) (Apache-2.0) integration that reports Pi's session and working state to herdr panes. herdr generates and updates that file itself; install it with `herdr integration install pi`.
+
 ## Origins and attribution
 
 | Extension | Origin |
